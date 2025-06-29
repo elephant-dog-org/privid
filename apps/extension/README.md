@@ -7,9 +7,18 @@
 -   Basic browser extension scaffold (Manifest V3)
 -   Popup interface with status and verification button
 -   Mock Holonym verification flow
+-   **ATProto (Bluesky) post simulation in Mock Mode**
 -   TypeScript support for safer development
 -   Uses [Bun](https://bun.sh) as the package manager and runtime
 -   Future: Bluesky badge display, AT Protocol publishing, test mode, packaging
+
+## ATProto Simulation (Developer Demo)
+
+You can simulate publishing a verification post to the AT Protocol (e.g. Bluesky) while in Mock Verification Mode.
+
+**Note:**
+
+-   No real data is posted to Bluesky or the AT Protocol.
 
 ## Development Setup
 

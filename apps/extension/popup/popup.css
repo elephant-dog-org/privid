@@ -182,3 +182,84 @@ button:disabled {
   stroke: hsl(330, 15%, 40%) !important;
   opacity: 0.7;
 }
+
+.button-group {
+  margin-top: 10px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.button-divider {
+  margin: 12px 0 20px 0;
+  border-top: 1px solid var(--border-color);
+  width: 100%;
+}
+
+.button-label {
+  font-size: 0.92em;
+  color: var(--text-color-secondary);
+  margin-bottom: 4px;
+  text-align: left;
+  padding-left: 2px;
+}
+
+#atprotoBtn {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.atproto-result-card {
+  background: #fff;
+  border-radius: 1rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  padding: 1.2em 1.2em;
+  margin-top: 0.5em;
+  text-align: left;
+  border: 1px solid #eee;
+}
+
+.atproto-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 1em;
+}
+
+.atproto-result-check {
+  color: #3bb273;
+  font-size: 1.3em;
+}
+
+.atproto-result-title {
+  font-weight: 600;
+  font-size: 1.08em;
+}
+
+.atproto-result-field {
+  margin-bottom: 0.7em;
+}
+
+.atproto-result-badge {
+  color: #7c3aed;
+}
+
+.atproto-result-proof {
+  color: #444;
+}
+
+.atproto-result-timestamp {
+  font-size: 0.97em;
+  color: #222;
+}
+
+.atproto-status {
+  margin-top: 10px;
+  font-size: 0.95em;
+}
+
+.atproto-status-error {
+  color: #b00;
+  font-weight: 500;
+}
