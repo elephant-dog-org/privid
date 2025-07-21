@@ -10,8 +10,14 @@ help:
 	@echo "  clean      - Clean build artifacts"
 	@echo "  fmt        - Format code"
 	@echo "  clippy     - Run clippy linter"
-	@echo "  docker-build - Build Docker image"
-	@echo "  docker-run   - Run with Docker Compose"
+	@echo "  docker-build  - Build Docker image"
+	@echo "  docker-run    - Start Docker container"
+	@echo "  docker-stop   - Stop Docker container"
+	@echo "  docker-restart - Restart Docker container"
+	@echo "  docker-logs   - Show Docker logs"
+	@echo "  docker-clean  - Clean Docker containers and images"
+	@echo "  docker-rebuild - Rebuild and start Docker container"
+	@echo "  docker-status - Show Docker container status"
 	@echo "  release    - Build release version"
 
 # Setup environment
@@ -62,7 +68,38 @@ release:
 	cargo build --release
 	@echo "Release binary available at: target/release/privid-telegram-bot"
 
-# Docker commands removed - use cargo run instead
+# Docker commands
+docker-build:
+	@echo "Building Docker image..."
+	docker-compose build
+
+docker-run:
+	@echo "Starting Docker container..."
+	docker-compose up -d
+
+docker-stop:
+	@echo "Stopping Docker container..."
+	docker-compose down
+
+docker-restart:
+	@echo "Restarting Docker container..."
+	docker-compose restart
+
+docker-logs:
+	@echo "Showing Docker logs..."
+	docker-compose logs -f
+
+docker-clean:
+	@echo "Cleaning Docker containers and images..."
+	docker-compose down --rmi all --volumes --remove-orphans
+
+docker-rebuild:
+	@echo "Rebuilding and starting Docker container..."
+	docker-compose up -d --build
+
+docker-status:
+	@echo "Docker container status:"
+	docker-compose ps
 
 # Check code quality
 check: fmt clippy test
