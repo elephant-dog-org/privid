@@ -1,23 +1,37 @@
+import { AtpAgent } from '@atproto/api';
 import type { MockVerificationResult } from '../mocks/mockHolonym';
 
 /**
- * Simulates publishing a verification post to the AT Protocol (Bluesky).
- * Uses a dummy proof object consistent with MockVerificationResult.
+ * Publishes a verification post to the AT Protocol (Bluesky).
+ * Uses the user's accessJwt and did for authentication.
  */
 export async function publishVerificationPost(
     userHandle: string,
-    proof: MockVerificationResult
+    proof: MockVerificationResult,
+    accessJwt: string,
+    did: string
 ) {
-    // Simulated post object
-    return {
+    const agent = new AtpAgent({ service: 'https://bsky.social' });
+    // Set the session manually
+    await agent.resumeSession({
+        accessJwt,
+        did,
         handle: userHandle,
-        post: {
-            text: `I just verified as "${proof.badge}" using Holonym`,
-            proof,
-            createdAt: new Date().toISOString()
-        },
-        simulated: true
+        refreshJwt: '',
+        active: true
+    });
+    const postRecord = {
+        $type: 'app.bsky.feed.post',
+        text: `I just verified as "${proof.badge}" using Holonym.\nProof: ${proof.proof}`,
+        createdAt: new Date().toISOString()
+        // Optionally, you can add facets or custom fields here
     };
+    const response = await agent.com.atproto.repo.createRecord({
+        repo: did,
+        collection: 'app.bsky.feed.post',
+        record: postRecord
+    });
+    return response;
 }
 
 export function getDummyProof(): MockVerificationResult {

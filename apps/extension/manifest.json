@@ -8,5 +8,12 @@
   ],
   "action": {
     "default_popup": "popup/popup.html"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://bsky.app/profile/*"],
+      "js": ["dist/content/injectBadge.js"],
+      "css": ["dist/content/injectBadge.css"]
+    }
+  ]
 }

@@ -1,48 +1,87 @@
 # PrivID Extension
 
-**PrivID** is a privacy-preserving browser extension that integrates with [Holonym](https://holonym.io) to verify identities using zero-knowledge proofs.
+**PrivID** is a privacy-preserving browser extension that integrates with [Holonym](https://holonym.io) to verify identities using zero-knowledge proofs and display a verified badge on Bluesky (bsky.app) profiles.
 
 ## Features
 
--   Basic browser extension scaffold (Manifest V3)
--   Popup interface with status and verification button
--   Mock Holonym verification flow
--   **ATProto (Bluesky) post simulation in Mock Mode**
--   TypeScript support for safer development
+-   Manifest V3 browser extension (Chrome/Firefox)
+-   Popup interface with status, verification, and Bluesky login/logout
+-   Mock Holonym verification flow for development/testing
+-   **Bluesky (atproto) integration:**
+    -   Authenticate with Bluesky using handle + app password (no OAuth2)
+    -   Post verification proof to Bluesky (atproto) feed
+    -   Injects a verified badge on your Bluesky profile if verified
+-   TypeScript codebase, modular structure, and Vite build
 -   Uses [Bun](https://bun.sh) as the package manager and runtime
--   Future: Bluesky badge display, AT Protocol publishing, test mode, packaging
 
-## ATProto Simulation (Developer Demo)
+## Bluesky (atproto) Integration
 
-You can simulate publishing a verification post to the AT Protocol (e.g. Bluesky) while in Mock Verification Mode.
+### Authentication
 
-**Note:**
+-   Login via handle and Bluesky app password (not your main password)
+-   Credentials are entered in a secure modal in the popup
+-   On success, a JWT (`accessJwt`) is stored for session management
+-   Logout clears the session
 
--   No real data is posted to Bluesky or the AT Protocol.
+### Posting Verification
 
-## Development Setup
+-   After verifying, you can post a proof to your Bluesky feed
+-   The post is created using the atproto API and your session JWT
+-   In mock mode, posting is simulated and does not contact Bluesky
 
-### 1. Prerequisites
+### Badge Injection
 
--   [Bun](https://bun.sh) installed (recommended: latest stable)
--   [Node.js](https://nodejs.org/) (optional, for some tooling)
--   Chrome or Firefox browser (for extension testing)
+-   When you are verified and logged in, a blue verified badge is injected on your Bluesky profile (bsky.app)
+-   The badge only appears if:
+    -   You are mock or real verified
+    -   The profile handle in the URL matches your signed-in handle
+-   The badge is a symmetric blue scalloped circle with a white checkmark, styled to match the X (Twitter) verified badge
+-   Badge is injected next to the display name using the selector `[data-testid="profileHeaderDisplayName"]`
+-   Badge SVG and CSS are optimized for clarity and alignment
 
-### 2. Install Dependencies
+## Popup UI/UX
+
+-   **Status:** Shows verification state (verified, unverified, verifying)
+-   **Verify Button:** Starts Holonym verification (mocked for now)
+-   **Mock Mode Toggle:** Switches between real and mock verification flows
+-   **Bluesky Login/Logout:**
+    -   Login button appears when not authenticated (unless in mock mode)
+    -   Modal for entering handle and app password
+    -   Success/failure messages and auto-close on success
+    -   Logout button clears session
+-   **Post Verification to Bluesky:**
+    -   Appears when logged in and verified
+    -   Posts proof to your Bluesky feed (real or simulated)
+
+## Badge Styling
+
+-   SVG: 28x28, blue scalloped circle, white checkmark, drop shadow
+-   CSS: Inline-flex, vertical alignment, margin for spacing, drop shadow for glow
+-   See `content/injectBadge.ts` and `content/injectBadge.css` for details
+
+## Build & Packaging
+
+### Prerequisites
+
+-   [Bun](https://bun.sh) (latest stable)
+-   Chrome or Firefox for testing
+
+### Install Dependencies
 
 ```sh
 bun install
 ```
 
-### 3. Build the Extension
+### Build the Extension
 
 ```sh
 bun run build
 ```
 
-This will compile TypeScript and output the extension files to the appropriate directory.
+-   Uses Vite to build popup and content scripts as separate entry points
+-   Output is in `dist/` directory
 
-### 4. Load the Extension in Your Browser
+### Load in Browser
 
 -   **Chrome:**
     1. Go to `chrome://extensions/`
@@ -52,41 +91,44 @@ This will compile TypeScript and output the extension files to the appropriate d
 -   **Firefox:**
     1. Go to `about:debugging#/runtime/this-firefox`
     2. Click "Load Temporary Add-on"
-    3. Select the `manifest.json` file in `apps/extension`
+    3. Select the `privid-extension.zip` file
 
-### 5. Development Workflow
+### Packaging
 
--   Edit source files in `apps/extension/popup/`
--   Re-run `bun run build` after making changes, or use a watcher if configured
--   Reload the extension in your browser to see updates
+```sh
+bun run package-extension
+```
 
-## Packaging for Local Testing & Distribution
+-   Builds and zips the extension for distribution
+-   Output: `dist/privid-extension.zip`
 
-To create a ZIP file of the extension for local install or distribution:
+## Troubleshooting
 
-1. **Build and Package the Extension**
+-   **Badge not showing?**
+    -   Make sure you are verified and logged in
+    -   The badge only appears on your own profile (handle must match session)
+    -   Check that the content script is loaded (see `chrome://extensions/` > Inspect views)
+    -   Ensure the selector `[data-testid="profileHeaderDisplayName"]` exists on the page
+-   **Build issues?**
+    -   Ensure Vite and Bun are installed and up to date
+    -   Check that all entry points are correctly configured in `vite.config.ts`
+-   **Permissions:**
+    -   Only `storage` permission is required
+    -   Content script only runs on `https://bsky.app/profile/*`
 
-    From the `apps/extension` directory, run:
+## File Structure
 
-    ```sh
-    bun run package-extension
-    ```
+-   `popup/` — Popup UI, logic, Bluesky auth, and posting
+-   `content/` — Content scripts for badge injection and CSS
+-   `dist/` — Built output for popup and content scripts
+-   `manifest.json` — Extension manifest (MV3)
 
-    This will:
+## Security & Privacy
 
-    - Build the extension (output to `dist/`)
-    - Copy only the necessary files to a temporary `build/` directory
-    - Create a ZIP file in `dist/` (e.g., `privid-extension.zip`)
-    - Clean up the temporary build directory
+-   App password is only used for session authentication (never stored)
+-   No data is sent to Holonym or Bluesky in mock mode
+-   Follows Chrome/Firefox extension security best practices
 
-2. **Install the Extension Locally**
+---
 
-    - **Chrome/Edge/Brave:**
-        1. Unzip the ZIP file.
-        2. Go to `chrome://extensions/`.
-        3. Enable "Developer mode".
-        4. Click "Load unpacked" and select the unzipped folder.
-    - **Firefox:**
-        1. Go to `about:debugging#/runtime/this-firefox`.
-        2. Click "Load Temporary Add-on".
-        3. Select the privid-extension.zip file.
+For more details, see the code and comments in each file. PRs and issues welcome!

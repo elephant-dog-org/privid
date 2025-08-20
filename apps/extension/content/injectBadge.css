@@ -1,0 +1,17 @@
+.privid-verified-badge {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 4px;
+  margin-bottom: 2px;
+  line-height: 1;
+}
+.privid-verified-badge svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  filter: drop-shadow(0 0 1px #1DA1F2);
+}
+.privid-verified-badge:hover {
+  opacity: 1;
+} 

@@ -22,12 +22,14 @@
     "@vitejs/plugin-vue": "^6.0.0",
     "typescript": "^5.8.3",
     "vite": "^7.0.0",
+    "vitest": "^3.2.4",
     "web-ext": "^8.8.0"
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build --config vite.popup.config.ts && vite build --config vite.content.config.ts",
     "preview": "vite preview",
-    "package-extension": "sh scripts/package-extension.sh"
+    "package-extension": "sh scripts/package-extension.sh",
+    "test": "vitest run"
   }
 }

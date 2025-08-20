@@ -16,6 +16,10 @@ fi
 # Build the extension (from the extension root)
 bun run build
 
+# Copy content CSS to dist/content/
+mkdir -p dist/content
+cp content/injectBadge.css dist/content/injectBadge.css
+
 # Copy necessary files to build/
 cp manifest.json build/
 cp -r popup build/
