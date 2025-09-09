@@ -1,4 +1,5 @@
 import browser from 'webextension-polyfill';
+import { ethers } from 'ethers';
 import {
     getMockVerificationResult,
     MockVerificationResult
@@ -45,6 +46,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     const mockButtons = document.getElementById(
         'mockButtons'
     ) as HTMLDivElement;
+    // Wallet authentication elements
+    const walletSignInBtn = document.getElementById(
+        'walletSignInBtn'
+    ) as HTMLButtonElement;
+    const walletModal = document.getElementById(
+        'walletModal'
+    ) as HTMLDivElement;
+    const closeWalletModalBtn = document.getElementById(
+        'closeWalletModalBtn'
+    ) as HTMLButtonElement;
+    const walletSignInModalBtn = document.getElementById(
+        'walletSignInModalBtn'
+    ) as HTMLButtonElement;
+    const signatureInput = document.getElementById(
+        'signatureInput'
+    ) as HTMLInputElement;
+    const walletError = document.getElementById(
+        'walletError'
+    ) as HTMLDivElement;
+    const walletSuccess = document.getElementById(
+        'walletSuccess'
+    ) as HTMLDivElement;
+    // Wallet address display elements
+    const walletAddressDisplay = document.getElementById(
+        'walletAddressDisplay'
+    ) as HTMLDivElement;
+    const walletAddressText = document.getElementById(
+        'walletAddressText'
+    ) as HTMLSpanElement;
+    const checkVerificationBtn = document.getElementById(
+        'checkVerificationBtn'
+    ) as HTMLButtonElement;
 
     type VerificationState = 'unverified' | 'verifying' | 'verified';
     interface StatusConfig {
@@ -161,12 +194,76 @@ document.addEventListener('DOMContentLoaded', async () => {
         loginBtn.style.display = 'block';
     }
 
+    // Helper to check and update wallet authentication state
+    async function updateWalletAuthState() {
+        if (!walletSignInBtn) return;
+
+        // Check for wallet session
+        const { walletAuth } = await browser.storage.local.get(['walletAuth']);
+        let isExpired = false;
+
+        if (
+            walletAuth &&
+            typeof walletAuth === 'object' &&
+            'expiresAt' in walletAuth
+        ) {
+            isExpired =
+                typeof walletAuth.expiresAt === 'number' &&
+                Date.now() > walletAuth.expiresAt;
+        }
+
+        if (isExpired) {
+            await browser.storage.local.remove('walletAuth');
+        }
+
+        const hasWalletAuth =
+            walletAuth &&
+            typeof walletAuth === 'object' &&
+            'address' in walletAuth &&
+            typeof walletAuth.address === 'string' &&
+            walletAuth.address.length > 0 &&
+            !isExpired;
+
+        if (hasWalletAuth) {
+            walletSignInBtn.textContent = 'Disconnect Wallet';
+            walletSignInBtn.dataset.walletConnected = 'true';
+            // Show wallet address
+            if (
+                walletAddressDisplay &&
+                walletAddressText &&
+                walletAuth &&
+                typeof walletAuth === 'object' &&
+                'address' in walletAuth &&
+                typeof walletAuth.address === 'string'
+            ) {
+                walletAddressText.textContent = walletAuth.address;
+                walletAddressDisplay.style.display = 'block';
+            }
+            // Show check verification button
+            if (checkVerificationBtn) {
+                checkVerificationBtn.style.display = 'block';
+            }
+        } else {
+            walletSignInBtn.textContent = 'Login Wallet';
+            walletSignInBtn.dataset.walletConnected = 'false';
+            // Hide wallet address
+            if (walletAddressDisplay) {
+                walletAddressDisplay.style.display = 'none';
+            }
+            // Hide check verification button
+            if (checkVerificationBtn) {
+                checkVerificationBtn.style.display = 'none';
+            }
+        }
+    }
+
     // Load toggle state from storage
     browser.storage.local
         .get(['mockMode'])
         .then((result: { mockMode?: boolean }) => {
             mockToggle.checked = !!result.mockMode;
             updateLoginBtnState(!!result.mockMode);
+            updateWalletAuthState(); // Update wallet auth state
             // Toggle button containers on load
             if (realButtons && mockButtons) {
                 if (!!result.mockMode) {
@@ -184,6 +281,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     mockToggle.addEventListener('change', () => {
         browser.storage.local.set({ mockMode: mockToggle.checked }).then(() => {
             updateLoginBtnState(mockToggle.checked);
+            updateWalletAuthState(); // Update wallet auth state
             // Toggle button containers on toggle
             if (realButtons && mockButtons) {
                 if (mockToggle.checked) {
@@ -282,6 +380,211 @@ document.addEventListener('DOMContentLoaded', async () => {
             } finally {
                 modalLoginBtn.disabled = false;
                 modalLoginBtn.textContent = 'Login';
+            }
+        });
+    }
+
+    // Check verification button functionality
+    if (checkVerificationBtn) {
+        checkVerificationBtn.addEventListener('click', async () => {
+            checkVerificationBtn.disabled = true;
+            checkVerificationBtn.textContent = 'Checking...';
+
+            try {
+                // Get the connected wallet address
+                const { walletAuth } = await browser.storage.local.get([
+                    'walletAuth'
+                ]);
+
+                if (
+                    !walletAuth ||
+                    typeof walletAuth !== 'object' ||
+                    !('address' in walletAuth)
+                ) {
+                    throw new Error('No wallet connected');
+                }
+
+                // Here you would implement the actual verification check
+                // For now, we'll just show a success message
+                alert(
+                    `Verification check initiated for wallet: ${walletAuth.address}`
+                );
+            } catch (err: any) {
+                alert(`Verification check failed: ${err.message}`);
+            } finally {
+                checkVerificationBtn.disabled = false;
+                checkVerificationBtn.textContent = 'Check Verification';
+            }
+        });
+    }
+
+    // Wallet Sign-in button logic
+    if (walletSignInBtn) {
+        walletSignInBtn.addEventListener('click', async () => {
+            const walletConnected =
+                walletSignInBtn.dataset.walletConnected === 'true';
+
+            if (walletConnected) {
+                // Log out from wallet
+                await browser.storage.local.remove('walletAuth');
+                walletSignInBtn.textContent = 'Login Wallet';
+                walletSignInBtn.dataset.walletConnected = 'false';
+                // Hide wallet address display
+                if (walletAddressDisplay) {
+                    walletAddressDisplay.style.display = 'none';
+                }
+                // Hide check verification button
+                if (checkVerificationBtn) {
+                    checkVerificationBtn.style.display = 'none';
+                }
+            } else {
+                // Open wallet modal
+                if (walletModal) {
+                    walletModal.style.display = 'flex';
+                    signatureInput.value = '';
+                    walletError.style.display = 'none';
+                    if (walletSuccess) walletSuccess.style.display = 'none';
+                }
+            }
+        });
+    }
+
+    // Wallet Modal close button
+    if (closeWalletModalBtn) {
+        closeWalletModalBtn.addEventListener('click', () => {
+            if (walletModal) walletModal.style.display = 'none';
+        });
+    }
+
+    // Message to sign click-to-copy functionality
+    const messageToSign = document.getElementById(
+        'messageToSign'
+    ) as HTMLDivElement;
+    if (messageToSign) {
+        messageToSign.addEventListener('click', async () => {
+            const message = 'Sign this message to authenticate with PrivID';
+            try {
+                await navigator.clipboard.writeText(message);
+
+                // Visual feedback
+                const originalText = messageToSign.innerHTML;
+                messageToSign.innerHTML =
+                    '<strong>Copied!</strong><br />✓ Message copied to clipboard';
+                messageToSign.style.background = '#e8f5e8';
+                messageToSign.style.borderColor = '#4caf50';
+                messageToSign.style.color = '#2e7d32';
+
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    messageToSign.innerHTML = originalText;
+                    messageToSign.style.background = '#f8f8f8';
+                    messageToSign.style.borderColor = '#e0e0e0';
+                    messageToSign.style.color = '#666';
+                }, 2000);
+            } catch (err) {
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = message;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+
+                // Visual feedback
+                const originalText = messageToSign.innerHTML;
+                messageToSign.innerHTML =
+                    '<strong>Copied!</strong><br />✓ Message copied to clipboard';
+                messageToSign.style.background = '#e8f5e8';
+                messageToSign.style.borderColor = '#4caf50';
+                messageToSign.style.color = '#2e7d32';
+
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    messageToSign.innerHTML = originalText;
+                    messageToSign.style.background = '#f8f8f8';
+                    messageToSign.style.borderColor = '#e0e0e0';
+                    messageToSign.style.color = '#666';
+                }, 2000);
+            }
+        });
+    }
+
+    // Wallet Modal sign-in button
+    if (walletSignInModalBtn) {
+        walletSignInModalBtn.addEventListener('click', async () => {
+            const signature = signatureInput.value.trim();
+            walletError.style.display = 'none';
+            walletSignInModalBtn.disabled = true;
+            walletSignInModalBtn.textContent = 'Verifying...';
+
+            try {
+                // Basic validation
+                if (!signature) {
+                    throw new Error('Please provide a signature');
+                }
+
+                // Validate signature format (basic hex validation)
+                if (!ethers.isHexString(signature, 65)) {
+                    // 65 bytes = 130 hex chars + 0x
+                    throw new Error('Invalid signature format');
+                }
+
+                // Create a message to verify against (you can customize this)
+                const message = 'Sign this message to authenticate with PrivID';
+                const messageHash = ethers.hashMessage(message);
+
+                // Recover the signer's address from the signature
+                let recoveredAddress: string;
+                try {
+                    recoveredAddress = ethers.recoverAddress(
+                        messageHash,
+                        signature
+                    );
+                } catch (error) {
+                    throw new Error('Failed to recover address from signature');
+                }
+
+                // Store the verified wallet address
+                await browser.storage.local.set({
+                    walletAuth: {
+                        address: recoveredAddress,
+                        authenticatedAt: Date.now(),
+                        expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hour expiry
+                    }
+                });
+
+                walletError.style.display = 'none';
+                if (walletSuccess) {
+                    walletSuccess.style.display = 'block';
+                }
+
+                // Update button state to show logged in
+                walletSignInBtn.textContent = 'Disconnect Wallet';
+                walletSignInBtn.dataset.walletConnected = 'true';
+
+                // Show wallet address
+                if (walletAddressDisplay && walletAddressText) {
+                    walletAddressText.textContent = recoveredAddress;
+                    walletAddressDisplay.style.display = 'block';
+                }
+                // Show check verification button
+                if (checkVerificationBtn) {
+                    checkVerificationBtn.style.display = 'block';
+                }
+
+                // Auto-close modal after 1 second
+                setTimeout(() => {
+                    if (walletModal) walletModal.style.display = 'none';
+                    if (walletSuccess) walletSuccess.style.display = 'none';
+                }, 1000);
+            } catch (err: any) {
+                if (walletSuccess) walletSuccess.style.display = 'none';
+                walletError.textContent =
+                    err.message || 'Wallet authentication failed';
+                walletError.style.display = 'block';
+            } finally {
+                walletSignInModalBtn.disabled = false;
+                walletSignInModalBtn.textContent = 'Sign In';
             }
         });
     }
