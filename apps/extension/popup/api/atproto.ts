@@ -1,5 +1,8 @@
 import { AtpAgent } from '@atproto/api';
 import type { MockVerificationResult } from '../mocks/mockHolonym';
+import type { RealVerificationResult } from '../types/verification';
+
+type VerificationResult = MockVerificationResult | RealVerificationResult;
 
 /**
  * Publishes a verification post to the AT Protocol (Bluesky).
@@ -7,7 +10,7 @@ import type { MockVerificationResult } from '../mocks/mockHolonym';
  */
 export async function publishVerificationPost(
     userHandle: string,
-    proof: MockVerificationResult,
+    proof: VerificationResult,
     accessJwt: string,
     did: string
 ) {
@@ -20,9 +23,15 @@ export async function publishVerificationPost(
         refreshJwt: '',
         active: true
     });
+    // Determine if this is a real or mock verification
+    const isRealVerification = 'verificationType' in proof;
+    const verificationSource = isRealVerification
+        ? 'Holonym SBT verification'
+        : 'Holonym';
+
     const postRecord = {
         $type: 'app.bsky.feed.post',
-        text: `I just verified as "${proof.badge}" using Holonym.\nProof: ${proof.proof}`,
+        text: `I just verified as "${proof.badge}" using ${verificationSource}.\nProof: ${proof.proof}`,
         createdAt: new Date().toISOString()
         // Optionally, you can add facets or custom fields here
     };
