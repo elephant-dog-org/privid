@@ -317,7 +317,7 @@ button:disabled {
 /* Ensure wallet modal close button is positioned correctly */
 #closeWalletModalBtn {
   position: absolute !important;
-  top: 12px !important;
+  top: 20px !important;
   right: 16px !important;
   background: none !important;
   border: none !important;

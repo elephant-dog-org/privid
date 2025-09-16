@@ -4,8 +4,26 @@ import {
     getMockVerificationResult,
     MockVerificationResult
 } from './mocks/mockHolonym';
+import {
+    createRealVerificationResult,
+    RealVerificationResult
+} from './types/verification';
 import { icons } from './utils/icons';
 import { publishVerificationPost, getDummyProof } from './api/atproto';
+// Dynamic imports for blockchain functionality to reduce initial bundle size
+let verificationTypeToSBTPair: any;
+let getSBTByCircuitId: any;
+let getHubContract: any;
+
+// Function to dynamically load blockchain utilities
+async function loadBlockchainUtils() {
+    if (!verificationTypeToSBTPair) {
+        const blockchainUtils = await import('../blockchain/utils');
+        verificationTypeToSBTPair = blockchainUtils.verificationTypeToSBTPair;
+        getSBTByCircuitId = blockchainUtils.getSBTByCircuitId;
+        getHubContract = blockchainUtils.getHubContract;
+    }
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
     const statusTextEl = document.getElementById(
@@ -137,6 +155,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 mockButtons.style.display = 'none';
             }
         }
+
+        // Hide wallet-related buttons in mock mode
+        if (walletSignInBtn) {
+            walletSignInBtn.style.display = mockMode ? 'none' : 'block';
+        }
+        if (walletAddressDisplay) {
+            walletAddressDisplay.style.display = 'none';
+        }
+        if (checkVerificationBtn) {
+            checkVerificationBtn.style.display = 'none';
+        }
+
         if (!loginBtn) return;
         if (mockMode) {
             loginBtn.style.display = 'none';
@@ -263,7 +293,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         .then((result: { mockMode?: boolean }) => {
             mockToggle.checked = !!result.mockMode;
             updateLoginBtnState(!!result.mockMode);
-            updateWalletAuthState(); // Update wallet auth state
+            // Don't call updateWalletAuthState in mock mode
+            if (!result.mockMode) {
+                updateWalletAuthState();
+            }
             // Toggle button containers on load
             if (realButtons && mockButtons) {
                 if (!!result.mockMode) {
@@ -279,27 +312,38 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Listen for toggle changes
     mockToggle.addEventListener('change', () => {
-        browser.storage.local.set({ mockMode: mockToggle.checked }).then(() => {
-            updateLoginBtnState(mockToggle.checked);
-            updateWalletAuthState(); // Update wallet auth state
-            // Toggle button containers on toggle
-            if (realButtons && mockButtons) {
-                if (mockToggle.checked) {
-                    realButtons.style.display = 'none';
-                    mockButtons.style.display = 'block';
-                } else {
-                    realButtons.style.display = 'block';
-                    mockButtons.style.display = 'none';
+        browser.storage.local
+            .set({ mockMode: mockToggle.checked })
+            .then(async () => {
+                // Clear verification state when switching modes
+                await browser.storage.local.remove('verification');
+
+                // Reset status to unverified
+                setStatus('unverified');
+
+                updateLoginBtnState(mockToggle.checked);
+                // Only update wallet auth state in real mode
+                if (!mockToggle.checked) {
+                    updateWalletAuthState();
                 }
-            }
-            // Hide modal if switching to mock mode
-            if (mockToggle.checked && loginModal)
-                loginModal.style.display = 'none';
-            console.log(
-                '[PrivID] Mock verification mode set to:',
-                mockToggle.checked
-            );
-        });
+                // Toggle button containers on toggle
+                if (realButtons && mockButtons) {
+                    if (mockToggle.checked) {
+                        realButtons.style.display = 'none';
+                        mockButtons.style.display = 'block';
+                    } else {
+                        realButtons.style.display = 'block';
+                        mockButtons.style.display = 'none';
+                    }
+                }
+                // Hide modal if switching to mock mode
+                if (mockToggle.checked && loginModal)
+                    loginModal.style.display = 'none';
+                console.log(
+                    '[PrivID] Mock verification mode set to:',
+                    mockToggle.checked
+                );
+            });
     });
 
     // Login/Logout button logic
@@ -391,6 +435,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             checkVerificationBtn.textContent = 'Checking...';
 
             try {
+                // Load blockchain utilities dynamically
+                await loadBlockchainUtils();
+
                 // Get the connected wallet address
                 const { walletAuth } = await browser.storage.local.get([
                     'walletAuth'
@@ -404,11 +451,122 @@ document.addEventListener('DOMContentLoaded', async () => {
                     throw new Error('No wallet connected');
                 }
 
-                // Here you would implement the actual verification check
-                // For now, we'll just show a success message
-                alert(
-                    `Verification check initiated for wallet: ${walletAuth.address}`
+                const address = walletAuth.address as string;
+
+                // Check SBTs for each verification type
+                const verificationResults: { [key: string]: any } = {};
+                let foundValidSBT = false;
+                let realVerificationResult: RealVerificationResult | null =
+                    null;
+
+                for (const verificationType in verificationTypeToSBTPair) {
+                    const sbtPair = verificationTypeToSBTPair[
+                        verificationType as keyof typeof verificationTypeToSBTPair
+                    ] as [string, string];
+                    const circuitId: string = sbtPair[0];
+                    const description: string = sbtPair[1];
+                    try {
+                        console.log(
+                            `Checking ${verificationType} verification...`
+                        );
+                        console.log('address', address);
+
+                        const sbt = await getSBTByCircuitId(
+                            address,
+                            circuitId as string
+                        );
+
+                        if (
+                            sbt &&
+                            !sbt.revoked &&
+                            Number(sbt.expiry) > Math.floor(Date.now() / 1000)
+                        ) {
+                            console.log(`✅ ${verificationType} SBT found:`, {
+                                type: verificationType,
+                                description,
+                                circuitId,
+                                expiry: new Date(
+                                    Number(sbt.expiry) * 1000
+                                ).toISOString(),
+                                publicValues: sbt.publicValues,
+                                revoked: sbt.revoked
+                            });
+                            verificationResults[verificationType] = {
+                                found: true,
+                                sbt,
+                                description
+                            };
+
+                            // Store the first valid SBT as the verification result
+                            if (!foundValidSBT) {
+                                foundValidSBT = true;
+                                realVerificationResult =
+                                    createRealVerificationResult(
+                                        verificationType,
+                                        description,
+                                        circuitId,
+                                        sbt
+                                    );
+                            }
+                        } else {
+                            console.log(
+                                `❌ ${verificationType} SBT not found or expired/revoked`
+                            );
+                            verificationResults[verificationType] = {
+                                found: false,
+                                description
+                            };
+                        }
+                    } catch (error) {
+                        console.log(
+                            `Error checking ${verificationType} SBT:`,
+                            error
+                        );
+                        verificationResults[verificationType] = {
+                            found: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : 'Unknown error',
+                            description
+                        };
+                    }
+                }
+
+                // If we found a valid SBT, store it as the verification result
+                if (foundValidSBT && realVerificationResult) {
+                    await browser.storage.local.set({
+                        verification: realVerificationResult
+                    });
+                    console.log(
+                        '✅ Real verification result stored:',
+                        realVerificationResult
+                    );
+                    setStatus('verified');
+                }
+
+                const foundCount = Object.values(verificationResults).filter(
+                    (result) => result.found
+                ).length;
+
+                console.log(
+                    `Verification check complete. Found ${foundCount} valid SBTs out of ${
+                        Object.keys(verificationTypeToSBTPair).length
+                    } verification types.`
                 );
+                console.log('Verification results:', verificationResults);
+
+                if (foundValidSBT && realVerificationResult) {
+                    alert(
+                        `✅ Verification successful!\n\nFound valid SBT: ${realVerificationResult.badge}\nType: ${realVerificationResult.verificationType}\nProof: ${realVerificationResult.proof}\n\nYou are now verified!`
+                    );
+                } else {
+                    alert(
+                        `Verification check complete!\nFound ${foundCount} valid SBTs out of ${
+                            Object.keys(verificationTypeToSBTPair).length
+                        } verification types.\n\nNo valid SBTs found - you are not verified.`
+                    );
+                }
             } catch (err: any) {
                 alert(`Verification check failed: ${err.message}`);
             } finally {
@@ -524,19 +682,19 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
 
                 // Validate signature format (basic hex validation)
-                if (!ethers.isHexString(signature, 65)) {
+                if (!ethers.utils.isHexString(signature, 65)) {
                     // 65 bytes = 130 hex chars + 0x
                     throw new Error('Invalid signature format');
                 }
 
                 // Create a message to verify against (you can customize this)
                 const message = 'Sign this message to authenticate with PrivID';
-                const messageHash = ethers.hashMessage(message);
+                const messageHash = ethers.utils.hashMessage(message);
 
                 // Recover the signer's address from the signature
                 let recoveredAddress: string;
                 try {
-                    recoveredAddress = ethers.recoverAddress(
+                    recoveredAddress = ethers.utils.recoverAddress(
                         messageHash,
                         signature
                     );
@@ -600,9 +758,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
+    // Union type for both mock and real verification results
+    type VerificationResult = MockVerificationResult | RealVerificationResult;
+
     // Utility function to check if a user is verified
     function isUserVerified(
-        verification: MockVerificationResult | undefined
+        verification: VerificationResult | undefined
     ): boolean {
         return (
             !!verification &&
@@ -625,7 +786,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'verification'
                 ]);
                 const isVerified = isUserVerified(
-                    verification as MockVerificationResult | undefined
+                    verification as VerificationResult | undefined
                 );
                 const { mockMode } = await browser.storage.local.get([
                     'mockMode'
@@ -641,6 +802,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     return;
                 }
                 // Simulate post (no real API call)
+                const verificationResult = verification as VerificationResult;
+                const isRealVerification =
+                    'verificationType' in verificationResult;
+                const verificationSource = isRealVerification
+                    ? 'SBT verification'
+                    : 'Holonym';
+
                 atprotoStatusEl.innerHTML = `
                   <div class="atproto-result-card">
                     <div class="atproto-result-header">
@@ -648,13 +816,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                       <span class="atproto-result-title">Simulated ATProto Post Created</span>
                     </div>
                     <div class="atproto-result-field"><strong>Badge:</strong> <span class="atproto-result-badge">${
-                        (verification as MockVerificationResult).badge
+                        verificationResult.badge
                     }</span></div>
                     <div class="atproto-result-field"><strong>Proof:</strong> <span class="atproto-result-proof">${
-                        (verification as MockVerificationResult).proof
+                        verificationResult.proof
                     }</span></div>
+                    <div class="atproto-result-field"><strong>Source:</strong> <span class="atproto-result-source">${verificationSource}</span></div>
                     <div class="atproto-result-timestamp"><strong>Timestamp:</strong> ${new Date(
-                        (verification as MockVerificationResult).timestamp
+                        verificationResult.timestamp
                     ).toLocaleString()}</div>
                   </div>
                 `;
@@ -674,7 +843,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             'verification'
         ]);
         const isVerified = isUserVerified(
-            verification as MockVerificationResult | undefined
+            verification as VerificationResult | undefined
         );
         atprotoBtn.disabled = !isVerified;
         if (!isVerified) {
@@ -687,6 +856,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (button) {
         button.addEventListener('click', async () => {
+            // Check if mock mode is disabled
+            const { mockMode } = await browser.storage.local.get(['mockMode']);
+
+            if (!mockMode) {
+                // Redirect to Holonym when mock mode is disabled
+                window.open('https://id.human.tech/', '_blank');
+                return;
+            }
+
+            // Mock verification when mock mode is enabled
             setStatus('verifying');
             setTimeout(async () => {
                 const verificationResult = getMockVerificationResult();
@@ -696,7 +875,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 setStatus('verified');
                 await updateAtprotoButtonState();
                 attachSimulateListener();
-                await updateLoginBtnState(false); // update postToBskyBtn state after verification
+                // Get current mock mode state and update accordingly
+                const { mockMode } = await browser.storage.local.get([
+                    'mockMode'
+                ]);
+                await updateLoginBtnState(!!mockMode);
             }, 1500);
         });
     }
@@ -740,7 +923,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 const result = await publishVerificationPost(
                     handle,
-                    verification as MockVerificationResult,
+                    verification as VerificationResult,
                     accessJwt,
                     did
                 );
