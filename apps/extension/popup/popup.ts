@@ -6,14 +6,19 @@ import {
 } from './mocks/mockHolonym';
 import {
     createRealVerificationResult,
-    RealVerificationResult
+    RealVerificationResult,
+    VerificationResults
 } from './types/verification';
 import { icons } from './utils/icons';
-import { publishVerificationPost, getDummyProof } from './api/atproto';
+import { publishVerificationPost } from './api/atproto';
+import { Hub, SBTStructOutput } from '../blockchain/typechain/Hub';
 // Dynamic imports for blockchain functionality to reduce initial bundle size
-let verificationTypeToSBTPair: any;
-let getSBTByCircuitId: any;
-let getHubContract: any;
+let verificationTypeToSBTPair: Record<string, readonly [string, string]>;
+let getSBTByCircuitId: (
+    address: string,
+    circuitId: string
+) => Promise<SBTStructOutput>;
+let getHubContract: () => Hub;
 
 // Function to dynamically load blockchain utilities
 async function loadBlockchainUtils() {
@@ -417,9 +422,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (loginModal) loginModal.style.display = 'none';
                     if (loginSuccess) loginSuccess.style.display = 'none';
                 }, 1000);
-            } catch (err: any) {
+            } catch (err: unknown) {
                 if (loginSuccess) loginSuccess.style.display = 'none';
-                loginError.textContent = err.message || 'Login failed';
+                const errorMessage =
+                    err instanceof Error ? err.message : 'Login failed';
+                loginError.textContent = errorMessage;
                 loginError.style.display = 'block';
             } finally {
                 modalLoginBtn.disabled = false;
@@ -454,7 +461,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const address = walletAuth.address as string;
 
                 // Check SBTs for each verification type
-                const verificationResults: { [key: string]: any } = {};
+                const verificationResults: VerificationResults = {};
                 let foundValidSBT = false;
                 let realVerificationResult: RealVerificationResult | null =
                     null;
@@ -567,8 +574,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                         } verification types.\n\nNo valid SBTs found - you are not verified.`
                     );
                 }
-            } catch (err: any) {
-                alert(`Verification check failed: ${err.message}`);
+            } catch (err: unknown) {
+                const errorMessage =
+                    err instanceof Error
+                        ? err.message
+                        : 'Verification check failed';
+                alert(`Verification check failed: ${errorMessage}`);
             } finally {
                 checkVerificationBtn.disabled = false;
                 checkVerificationBtn.textContent = 'Check Verification';
@@ -735,10 +746,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (walletModal) walletModal.style.display = 'none';
                     if (walletSuccess) walletSuccess.style.display = 'none';
                 }, 1000);
-            } catch (err: any) {
+            } catch (err: unknown) {
                 if (walletSuccess) walletSuccess.style.display = 'none';
-                walletError.textContent =
-                    err.message || 'Wallet authentication failed';
+                const errorMessage =
+                    err instanceof Error
+                        ? err.message
+                        : 'Wallet authentication failed';
+                walletError.textContent = errorMessage;
                 walletError.style.display = 'block';
             } finally {
                 walletSignInModalBtn.disabled = false;

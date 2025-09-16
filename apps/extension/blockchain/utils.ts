@@ -25,13 +25,18 @@ const verificationTypeToSBTPair = {
 } as const;
 
 const getProvider = () => {
-    return new ethers.providers.JsonRpcProvider(process.env.OPTIMISM_RPC_URL);
+    return new ethers.providers.JsonRpcProvider(
+        'https://optimism-rpc.publicnode.com'
+    );
 };
 
 const getHubContract = () => {
     const provider = getProvider();
 
-    return Hub__factory.connect(process.env.HUB_ADDRESS!, provider);
+    return Hub__factory.connect(
+        '0x2AA822e264F8cc31A2b9C22f39e5551241e94DfB',
+        provider
+    );
 };
 
 const getSBTByCircuitId = async (address: string, circuitId: string) => {
