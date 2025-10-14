@@ -20,6 +20,27 @@
             </div>
 
             <button id="verifyBtn">Verify with Holonym</button>
+            <button id="walletSignInBtn" style="margin-top: 12px">
+                Login Wallet
+            </button>
+            <div
+                id="walletAddressDisplay"
+                style="
+                    display: none;
+                    margin-top: 8px;
+                    font-size: 0.85em;
+                    color: #666;
+                    word-break: break-all;
+                "
+            >
+                Connected: <span id="walletAddressText"></span>
+            </div>
+            <button
+                id="checkVerificationBtn"
+                style="display: none; margin-top: 12px"
+            >
+                Check Verification
+            </button>
             <div id="realButtons">
                 <button id="postToBskyBtn" style="margin-top: 12px">
                     Post Verification to Bluesky
@@ -103,6 +124,105 @@
                     style="color: #0a0; margin-top: 8px; display: none"
                 >
                     Login successful!
+                </div>
+            </div>
+        </div>
+        <!-- Wallet Sign-in Modal -->
+        <div id="walletModal" class="modal" style="display: none">
+            <div class="modal-content">
+                <button
+                    id="closeWalletModalBtn"
+                    class="modal-close"
+                    aria-label="Close"
+                >
+                    <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                    >
+                        <line
+                            x1="5"
+                            y1="5"
+                            x2="15"
+                            y2="15"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                        />
+                        <line
+                            x1="15"
+                            y1="5"
+                            x2="5"
+                            y2="15"
+                            stroke="currentColor"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                        />
+                    </svg>
+                </button>
+                <h2>Wallet Authentication</h2>
+                <div
+                    id="messageToSign"
+                    style="
+                        font-size: 0.92em;
+                        color: #666;
+                        margin-bottom: 16px;
+                        text-align: center;
+                        padding: 12px;
+                        background: #f8f8f8;
+                        border-radius: 8px;
+                        cursor: pointer;
+                        user-select: none;
+                        border: 1px solid #e0e0e0;
+                        transition: background-color 0.2s;
+                    "
+                    title="Click to copy message"
+                >
+                    <strong>Click to copy the message to sign:</strong><br />
+                    "Sign this message to authenticate with PrivID"
+                </div>
+                <input
+                    id="signatureInput"
+                    type="text"
+                    placeholder="Signature"
+                    autocomplete="off"
+                />
+                <div style="font-size: 0.92em; color: #b00; margin-bottom: 8px">
+                    Please sign the message above with your wallet and provide
+                    the signature.
+                </div>
+                <div
+                    style="
+                        font-size: 0.85em;
+                        color: #666;
+                        margin-bottom: 8px;
+                        line-height: 1.4;
+                        text-align: justify;
+                    "
+                >
+                    In case you don't have a signature, you can generate it
+                    <a
+                        href="https://1.x.wagmi.sh/examples/sign-message"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style="color: #007bff; text-decoration: underline"
+                        >here</a
+                    >. Connect the wallet, and sign the message above. Then copy
+                    the signature and paste it here.
+                </div>
+                <button id="walletSignInModalBtn">Sign In</button>
+                <div
+                    id="walletError"
+                    style="color: #c00; margin-top: 8px; display: none"
+                ></div>
+                <div
+                    id="walletSuccess"
+                    style="color: #0a0; margin-top: 8px; display: none"
+                >
+                    Wallet authentication successful!
                 </div>
             </div>
         </div>

@@ -7,4 +7,5 @@
 /cache
 /temp
 /test-results
+/blockchain/typechain
 .env

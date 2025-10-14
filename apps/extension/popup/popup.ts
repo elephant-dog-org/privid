@@ -1,10 +1,34 @@
 import browser from 'webextension-polyfill';
+import { ethers } from 'ethers';
 import {
     getMockVerificationResult,
     MockVerificationResult
 } from './mocks/mockHolonym';
+import {
+    createRealVerificationResult,
+    RealVerificationResult,
+    VerificationResults
+} from './types/verification';
 import { icons } from './utils/icons';
-import { publishVerificationPost, getDummyProof } from './api/atproto';
+import { publishVerificationPost } from './api/atproto';
+import { Hub, SBTStructOutput } from '../blockchain/typechain/Hub';
+// Dynamic imports for blockchain functionality to reduce initial bundle size
+let verificationTypeToSBTPair: Record<string, readonly [string, string]>;
+let getSBTByCircuitId: (
+    address: string,
+    circuitId: string
+) => Promise<SBTStructOutput>;
+let getHubContract: () => Hub;
+
+// Function to dynamically load blockchain utilities
+async function loadBlockchainUtils() {
+    if (!verificationTypeToSBTPair) {
+        const blockchainUtils = await import('../blockchain/utils');
+        verificationTypeToSBTPair = blockchainUtils.verificationTypeToSBTPair;
+        getSBTByCircuitId = blockchainUtils.getSBTByCircuitId;
+        getHubContract = blockchainUtils.getHubContract;
+    }
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
     const statusTextEl = document.getElementById(
@@ -45,6 +69,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     const mockButtons = document.getElementById(
         'mockButtons'
     ) as HTMLDivElement;
+    // Wallet authentication elements
+    const walletSignInBtn = document.getElementById(
+        'walletSignInBtn'
+    ) as HTMLButtonElement;
+    const walletModal = document.getElementById(
+        'walletModal'
+    ) as HTMLDivElement;
+    const closeWalletModalBtn = document.getElementById(
+        'closeWalletModalBtn'
+    ) as HTMLButtonElement;
+    const walletSignInModalBtn = document.getElementById(
+        'walletSignInModalBtn'
+    ) as HTMLButtonElement;
+    const signatureInput = document.getElementById(
+        'signatureInput'
+    ) as HTMLInputElement;
+    const walletError = document.getElementById(
+        'walletError'
+    ) as HTMLDivElement;
+    const walletSuccess = document.getElementById(
+        'walletSuccess'
+    ) as HTMLDivElement;
+    // Wallet address display elements
+    const walletAddressDisplay = document.getElementById(
+        'walletAddressDisplay'
+    ) as HTMLDivElement;
+    const walletAddressText = document.getElementById(
+        'walletAddressText'
+    ) as HTMLSpanElement;
+    const checkVerificationBtn = document.getElementById(
+        'checkVerificationBtn'
+    ) as HTMLButtonElement;
 
     type VerificationState = 'unverified' | 'verifying' | 'verified';
     interface StatusConfig {
@@ -104,6 +160,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 mockButtons.style.display = 'none';
             }
         }
+
+        // Hide wallet-related buttons in mock mode
+        if (walletSignInBtn) {
+            walletSignInBtn.style.display = mockMode ? 'none' : 'block';
+        }
+        if (walletAddressDisplay) {
+            walletAddressDisplay.style.display = 'none';
+        }
+        if (checkVerificationBtn) {
+            checkVerificationBtn.style.display = 'none';
+        }
+
         if (!loginBtn) return;
         if (mockMode) {
             loginBtn.style.display = 'none';
@@ -161,12 +229,79 @@ document.addEventListener('DOMContentLoaded', async () => {
         loginBtn.style.display = 'block';
     }
 
+    // Helper to check and update wallet authentication state
+    async function updateWalletAuthState() {
+        if (!walletSignInBtn) return;
+
+        // Check for wallet session
+        const { walletAuth } = await browser.storage.local.get(['walletAuth']);
+        let isExpired = false;
+
+        if (
+            walletAuth &&
+            typeof walletAuth === 'object' &&
+            'expiresAt' in walletAuth
+        ) {
+            isExpired =
+                typeof walletAuth.expiresAt === 'number' &&
+                Date.now() > walletAuth.expiresAt;
+        }
+
+        if (isExpired) {
+            await browser.storage.local.remove('walletAuth');
+        }
+
+        const hasWalletAuth =
+            walletAuth &&
+            typeof walletAuth === 'object' &&
+            'address' in walletAuth &&
+            typeof walletAuth.address === 'string' &&
+            walletAuth.address.length > 0 &&
+            !isExpired;
+
+        if (hasWalletAuth) {
+            walletSignInBtn.textContent = 'Disconnect Wallet';
+            walletSignInBtn.dataset.walletConnected = 'true';
+            // Show wallet address
+            if (
+                walletAddressDisplay &&
+                walletAddressText &&
+                walletAuth &&
+                typeof walletAuth === 'object' &&
+                'address' in walletAuth &&
+                typeof walletAuth.address === 'string'
+            ) {
+                walletAddressText.textContent = walletAuth.address;
+                walletAddressDisplay.style.display = 'block';
+            }
+            // Show check verification button
+            if (checkVerificationBtn) {
+                checkVerificationBtn.style.display = 'block';
+            }
+        } else {
+            walletSignInBtn.textContent = 'Login Wallet';
+            walletSignInBtn.dataset.walletConnected = 'false';
+            // Hide wallet address
+            if (walletAddressDisplay) {
+                walletAddressDisplay.style.display = 'none';
+            }
+            // Hide check verification button
+            if (checkVerificationBtn) {
+                checkVerificationBtn.style.display = 'none';
+            }
+        }
+    }
+
     // Load toggle state from storage
     browser.storage.local
         .get(['mockMode'])
         .then((result: { mockMode?: boolean }) => {
             mockToggle.checked = !!result.mockMode;
             updateLoginBtnState(!!result.mockMode);
+            // Don't call updateWalletAuthState in mock mode
+            if (!result.mockMode) {
+                updateWalletAuthState();
+            }
             // Toggle button containers on load
             if (realButtons && mockButtons) {
                 if (!!result.mockMode) {
@@ -182,26 +317,38 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Listen for toggle changes
     mockToggle.addEventListener('change', () => {
-        browser.storage.local.set({ mockMode: mockToggle.checked }).then(() => {
-            updateLoginBtnState(mockToggle.checked);
-            // Toggle button containers on toggle
-            if (realButtons && mockButtons) {
-                if (mockToggle.checked) {
-                    realButtons.style.display = 'none';
-                    mockButtons.style.display = 'block';
-                } else {
-                    realButtons.style.display = 'block';
-                    mockButtons.style.display = 'none';
+        browser.storage.local
+            .set({ mockMode: mockToggle.checked })
+            .then(async () => {
+                // Clear verification state when switching modes
+                await browser.storage.local.remove('verification');
+
+                // Reset status to unverified
+                setStatus('unverified');
+
+                updateLoginBtnState(mockToggle.checked);
+                // Only update wallet auth state in real mode
+                if (!mockToggle.checked) {
+                    updateWalletAuthState();
                 }
-            }
-            // Hide modal if switching to mock mode
-            if (mockToggle.checked && loginModal)
-                loginModal.style.display = 'none';
-            console.log(
-                '[PrivID] Mock verification mode set to:',
-                mockToggle.checked
-            );
-        });
+                // Toggle button containers on toggle
+                if (realButtons && mockButtons) {
+                    if (mockToggle.checked) {
+                        realButtons.style.display = 'none';
+                        mockButtons.style.display = 'block';
+                    } else {
+                        realButtons.style.display = 'block';
+                        mockButtons.style.display = 'none';
+                    }
+                }
+                // Hide modal if switching to mock mode
+                if (mockToggle.checked && loginModal)
+                    loginModal.style.display = 'none';
+                console.log(
+                    '[PrivID] Mock verification mode set to:',
+                    mockToggle.checked
+                );
+            });
     });
 
     // Login/Logout button logic
@@ -275,13 +422,341 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (loginModal) loginModal.style.display = 'none';
                     if (loginSuccess) loginSuccess.style.display = 'none';
                 }, 1000);
-            } catch (err: any) {
+            } catch (err: unknown) {
                 if (loginSuccess) loginSuccess.style.display = 'none';
-                loginError.textContent = err.message || 'Login failed';
+                const errorMessage =
+                    err instanceof Error ? err.message : 'Login failed';
+                loginError.textContent = errorMessage;
                 loginError.style.display = 'block';
             } finally {
                 modalLoginBtn.disabled = false;
                 modalLoginBtn.textContent = 'Login';
+            }
+        });
+    }
+
+    // Check verification button functionality
+    if (checkVerificationBtn) {
+        checkVerificationBtn.addEventListener('click', async () => {
+            checkVerificationBtn.disabled = true;
+            checkVerificationBtn.textContent = 'Checking...';
+
+            try {
+                // Load blockchain utilities dynamically
+                await loadBlockchainUtils();
+
+                // Get the connected wallet address
+                const { walletAuth } = await browser.storage.local.get([
+                    'walletAuth'
+                ]);
+
+                if (
+                    !walletAuth ||
+                    typeof walletAuth !== 'object' ||
+                    !('address' in walletAuth)
+                ) {
+                    throw new Error('No wallet connected');
+                }
+
+                const address = walletAuth.address as string;
+
+                // Check SBTs for each verification type
+                const verificationResults: VerificationResults = {};
+                let foundValidSBT = false;
+                let realVerificationResult: RealVerificationResult | null =
+                    null;
+
+                for (const verificationType in verificationTypeToSBTPair) {
+                    const sbtPair = verificationTypeToSBTPair[
+                        verificationType as keyof typeof verificationTypeToSBTPair
+                    ] as [string, string];
+                    const circuitId: string = sbtPair[0];
+                    const description: string = sbtPair[1];
+                    try {
+                        console.log(
+                            `Checking ${verificationType} verification...`
+                        );
+                        console.log('address', address);
+
+                        const sbt = await getSBTByCircuitId(
+                            address,
+                            circuitId as string
+                        );
+
+                        if (
+                            sbt &&
+                            !sbt.revoked &&
+                            Number(sbt.expiry) > Math.floor(Date.now() / 1000)
+                        ) {
+                            console.log(`✅ ${verificationType} SBT found:`, {
+                                type: verificationType,
+                                description,
+                                circuitId,
+                                expiry: new Date(
+                                    Number(sbt.expiry) * 1000
+                                ).toISOString(),
+                                publicValues: sbt.publicValues,
+                                revoked: sbt.revoked
+                            });
+                            verificationResults[verificationType] = {
+                                found: true,
+                                sbt,
+                                description
+                            };
+
+                            // Store the first valid SBT as the verification result
+                            if (!foundValidSBT) {
+                                foundValidSBT = true;
+                                realVerificationResult =
+                                    createRealVerificationResult(
+                                        verificationType,
+                                        description,
+                                        circuitId,
+                                        sbt
+                                    );
+                            }
+                        } else {
+                            console.log(
+                                `❌ ${verificationType} SBT not found or expired/revoked`
+                            );
+                            verificationResults[verificationType] = {
+                                found: false,
+                                description
+                            };
+                        }
+                    } catch (error) {
+                        console.log(
+                            `Error checking ${verificationType} SBT:`,
+                            error
+                        );
+                        verificationResults[verificationType] = {
+                            found: false,
+                            error:
+                                error instanceof Error
+                                    ? error.message
+                                    : 'Unknown error',
+                            description
+                        };
+                    }
+                }
+
+                // If we found a valid SBT, store it as the verification result
+                if (foundValidSBT && realVerificationResult) {
+                    await browser.storage.local.set({
+                        verification: realVerificationResult
+                    });
+                    console.log(
+                        '✅ Real verification result stored:',
+                        realVerificationResult
+                    );
+                    setStatus('verified');
+                }
+
+                const foundCount = Object.values(verificationResults).filter(
+                    (result) => result.found
+                ).length;
+
+                console.log(
+                    `Verification check complete. Found ${foundCount} valid SBTs out of ${
+                        Object.keys(verificationTypeToSBTPair).length
+                    } verification types.`
+                );
+                console.log('Verification results:', verificationResults);
+
+                if (foundValidSBT && realVerificationResult) {
+                    alert(
+                        `✅ Verification successful!\n\nFound valid SBT: ${realVerificationResult.badge}\nType: ${realVerificationResult.verificationType}\nProof: ${realVerificationResult.proof}\n\nYou are now verified!`
+                    );
+                } else {
+                    alert(
+                        `Verification check complete!\nFound ${foundCount} valid SBTs out of ${
+                            Object.keys(verificationTypeToSBTPair).length
+                        } verification types.\n\nNo valid SBTs found - you are not verified.`
+                    );
+                }
+            } catch (err: unknown) {
+                const errorMessage =
+                    err instanceof Error
+                        ? err.message
+                        : 'Verification check failed';
+                alert(`Verification check failed: ${errorMessage}`);
+            } finally {
+                checkVerificationBtn.disabled = false;
+                checkVerificationBtn.textContent = 'Check Verification';
+            }
+        });
+    }
+
+    // Wallet Sign-in button logic
+    if (walletSignInBtn) {
+        walletSignInBtn.addEventListener('click', async () => {
+            const walletConnected =
+                walletSignInBtn.dataset.walletConnected === 'true';
+
+            if (walletConnected) {
+                // Log out from wallet
+                await browser.storage.local.remove('walletAuth');
+                walletSignInBtn.textContent = 'Login Wallet';
+                walletSignInBtn.dataset.walletConnected = 'false';
+                // Hide wallet address display
+                if (walletAddressDisplay) {
+                    walletAddressDisplay.style.display = 'none';
+                }
+                // Hide check verification button
+                if (checkVerificationBtn) {
+                    checkVerificationBtn.style.display = 'none';
+                }
+            } else {
+                // Open wallet modal
+                if (walletModal) {
+                    walletModal.style.display = 'flex';
+                    signatureInput.value = '';
+                    walletError.style.display = 'none';
+                    if (walletSuccess) walletSuccess.style.display = 'none';
+                }
+            }
+        });
+    }
+
+    // Wallet Modal close button
+    if (closeWalletModalBtn) {
+        closeWalletModalBtn.addEventListener('click', () => {
+            if (walletModal) walletModal.style.display = 'none';
+        });
+    }
+
+    // Message to sign click-to-copy functionality
+    const messageToSign = document.getElementById(
+        'messageToSign'
+    ) as HTMLDivElement;
+    if (messageToSign) {
+        messageToSign.addEventListener('click', async () => {
+            const message = 'Sign this message to authenticate with PrivID';
+            try {
+                await navigator.clipboard.writeText(message);
+
+                // Visual feedback
+                const originalText = messageToSign.innerHTML;
+                messageToSign.innerHTML =
+                    '<strong>Copied!</strong><br />✓ Message copied to clipboard';
+                messageToSign.style.background = '#e8f5e8';
+                messageToSign.style.borderColor = '#4caf50';
+                messageToSign.style.color = '#2e7d32';
+
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    messageToSign.innerHTML = originalText;
+                    messageToSign.style.background = '#f8f8f8';
+                    messageToSign.style.borderColor = '#e0e0e0';
+                    messageToSign.style.color = '#666';
+                }, 2000);
+            } catch (err) {
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = message;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+
+                // Visual feedback
+                const originalText = messageToSign.innerHTML;
+                messageToSign.innerHTML =
+                    '<strong>Copied!</strong><br />✓ Message copied to clipboard';
+                messageToSign.style.background = '#e8f5e8';
+                messageToSign.style.borderColor = '#4caf50';
+                messageToSign.style.color = '#2e7d32';
+
+                // Reset after 2 seconds
+                setTimeout(() => {
+                    messageToSign.innerHTML = originalText;
+                    messageToSign.style.background = '#f8f8f8';
+                    messageToSign.style.borderColor = '#e0e0e0';
+                    messageToSign.style.color = '#666';
+                }, 2000);
+            }
+        });
+    }
+
+    // Wallet Modal sign-in button
+    if (walletSignInModalBtn) {
+        walletSignInModalBtn.addEventListener('click', async () => {
+            const signature = signatureInput.value.trim();
+            walletError.style.display = 'none';
+            walletSignInModalBtn.disabled = true;
+            walletSignInModalBtn.textContent = 'Verifying...';
+
+            try {
+                // Basic validation
+                if (!signature) {
+                    throw new Error('Please provide a signature');
+                }
+
+                // Validate signature format (basic hex validation)
+                if (!ethers.utils.isHexString(signature, 65)) {
+                    // 65 bytes = 130 hex chars + 0x
+                    throw new Error('Invalid signature format');
+                }
+
+                // Create a message to verify against (you can customize this)
+                const message = 'Sign this message to authenticate with PrivID';
+                const messageHash = ethers.utils.hashMessage(message);
+
+                // Recover the signer's address from the signature
+                let recoveredAddress: string;
+                try {
+                    recoveredAddress = ethers.utils.recoverAddress(
+                        messageHash,
+                        signature
+                    );
+                } catch (error) {
+                    throw new Error('Failed to recover address from signature');
+                }
+
+                // Store the verified wallet address
+                await browser.storage.local.set({
+                    walletAuth: {
+                        address: recoveredAddress,
+                        authenticatedAt: Date.now(),
+                        expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hour expiry
+                    }
+                });
+
+                walletError.style.display = 'none';
+                if (walletSuccess) {
+                    walletSuccess.style.display = 'block';
+                }
+
+                // Update button state to show logged in
+                walletSignInBtn.textContent = 'Disconnect Wallet';
+                walletSignInBtn.dataset.walletConnected = 'true';
+
+                // Show wallet address
+                if (walletAddressDisplay && walletAddressText) {
+                    walletAddressText.textContent = recoveredAddress;
+                    walletAddressDisplay.style.display = 'block';
+                }
+                // Show check verification button
+                if (checkVerificationBtn) {
+                    checkVerificationBtn.style.display = 'block';
+                }
+
+                // Auto-close modal after 1 second
+                setTimeout(() => {
+                    if (walletModal) walletModal.style.display = 'none';
+                    if (walletSuccess) walletSuccess.style.display = 'none';
+                }, 1000);
+            } catch (err: unknown) {
+                if (walletSuccess) walletSuccess.style.display = 'none';
+                const errorMessage =
+                    err instanceof Error
+                        ? err.message
+                        : 'Wallet authentication failed';
+                walletError.textContent = errorMessage;
+                walletError.style.display = 'block';
+            } finally {
+                walletSignInModalBtn.disabled = false;
+                walletSignInModalBtn.textContent = 'Sign In';
             }
         });
     }
@@ -297,9 +772,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
+    // Union type for both mock and real verification results
+    type VerificationResult = MockVerificationResult | RealVerificationResult;
+
     // Utility function to check if a user is verified
     function isUserVerified(
-        verification: MockVerificationResult | undefined
+        verification: VerificationResult | undefined
     ): boolean {
         return (
             !!verification &&
@@ -322,7 +800,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'verification'
                 ]);
                 const isVerified = isUserVerified(
-                    verification as MockVerificationResult | undefined
+                    verification as VerificationResult | undefined
                 );
                 const { mockMode } = await browser.storage.local.get([
                     'mockMode'
@@ -338,6 +816,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                     return;
                 }
                 // Simulate post (no real API call)
+                const verificationResult = verification as VerificationResult;
+                const isRealVerification =
+                    'verificationType' in verificationResult;
+                const verificationSource = isRealVerification
+                    ? 'SBT verification'
+                    : 'Holonym';
+
                 atprotoStatusEl.innerHTML = `
                   <div class="atproto-result-card">
                     <div class="atproto-result-header">
@@ -345,13 +830,14 @@ document.addEventListener('DOMContentLoaded', async () => {
                       <span class="atproto-result-title">Simulated ATProto Post Created</span>
                     </div>
                     <div class="atproto-result-field"><strong>Badge:</strong> <span class="atproto-result-badge">${
-                        (verification as MockVerificationResult).badge
+                        verificationResult.badge
                     }</span></div>
                     <div class="atproto-result-field"><strong>Proof:</strong> <span class="atproto-result-proof">${
-                        (verification as MockVerificationResult).proof
+                        verificationResult.proof
                     }</span></div>
+                    <div class="atproto-result-field"><strong>Source:</strong> <span class="atproto-result-source">${verificationSource}</span></div>
                     <div class="atproto-result-timestamp"><strong>Timestamp:</strong> ${new Date(
-                        (verification as MockVerificationResult).timestamp
+                        verificationResult.timestamp
                     ).toLocaleString()}</div>
                   </div>
                 `;
@@ -371,7 +857,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             'verification'
         ]);
         const isVerified = isUserVerified(
-            verification as MockVerificationResult | undefined
+            verification as VerificationResult | undefined
         );
         atprotoBtn.disabled = !isVerified;
         if (!isVerified) {
@@ -384,6 +870,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (button) {
         button.addEventListener('click', async () => {
+            // Check if mock mode is disabled
+            const { mockMode } = await browser.storage.local.get(['mockMode']);
+
+            if (!mockMode) {
+                // Redirect to Holonym when mock mode is disabled
+                window.open('https://id.human.tech/', '_blank');
+                return;
+            }
+
+            // Mock verification when mock mode is enabled
             setStatus('verifying');
             setTimeout(async () => {
                 const verificationResult = getMockVerificationResult();
@@ -393,7 +889,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 setStatus('verified');
                 await updateAtprotoButtonState();
                 attachSimulateListener();
-                await updateLoginBtnState(false); // update postToBskyBtn state after verification
+                // Get current mock mode state and update accordingly
+                const { mockMode } = await browser.storage.local.get([
+                    'mockMode'
+                ]);
+                await updateLoginBtnState(!!mockMode);
             }, 1500);
         });
     }
@@ -437,7 +937,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 const result = await publishVerificationPost(
                     handle,
-                    verification as MockVerificationResult,
+                    verification as VerificationResult,
                     accessJwt,
                     did
                 );
