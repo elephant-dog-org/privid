@@ -30,6 +30,8 @@ pub struct Config {
     pub optimism_rpc_url: String,
     /// Holonym Hub contract address on Optimism
     pub hub_contract_address: String,
+    /// Ethereum mainnet JSON-RPC endpoint URL (for ENS resolution)
+    pub ethereum_rpc_url: String,
     /// Logging level filter
     pub rust_log: String,
 }
@@ -64,6 +66,9 @@ impl Config {
         let hub_contract_address = env::var("HUB_CONTRACT_ADDRESS")
             .unwrap_or_else(|_| "0x2AA822e264F8cc31A2b9C22f39e5551241e94DfB".to_string());
 
+        let ethereum_rpc_url = env::var("ETHEREUM_RPC_URL")
+            .unwrap_or_else(|_| "https://ethereum-rpc.publicnode.com".to_string());
+
         let rust_log = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
         Self {
@@ -71,6 +76,7 @@ impl Config {
             verification_mode,
             optimism_rpc_url,
             hub_contract_address,
+            ethereum_rpc_url,
             rust_log,
         }
     }

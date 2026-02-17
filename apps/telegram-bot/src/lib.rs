@@ -1,5 +1,7 @@
 pub mod blockchain;
 pub mod config;
+pub mod ens;
+pub mod registry;
 pub mod state;
 pub mod storage;
 pub mod verification;
@@ -7,6 +9,8 @@ pub mod verification;
 // Re-export main types for easier access
 pub use blockchain::{BlockchainVerificationProvider, RpcClient, SbtData, VerificationType};
 pub use config::{Config, VerificationMode};
+pub use ens::{EnsError, EnsResolver};
+pub use registry::{Registry, RegistrationEntry};
 pub use state::{BotState, UserSession, VerificationResult, VerificationState};
 pub use storage::FileStorage;
 pub use verification::{MockVerificationProvider, VerificationError, VerificationProvider};

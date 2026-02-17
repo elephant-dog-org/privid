@@ -54,6 +54,17 @@ impl VerificationType {
         }
     }
 
+    /// Short label for display in badge messages.
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            VerificationType::Kyc => "KYC",
+            VerificationType::Phone => "Phone",
+            VerificationType::Passport => "Passport",
+            VerificationType::CleanHands => "Clean Hands",
+            VerificationType::Biometrics => "Biometrics",
+        }
+    }
+
     /// Human-readable description of the verification type.
     pub fn description(&self) -> &'static str {
         match self {
