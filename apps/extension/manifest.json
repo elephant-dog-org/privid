@@ -19,6 +19,12 @@
       "matches": ["https://mail.google.com/*"],
       "js": ["dist/content/gmail/injectGmailBadge.js"],
       "css": ["dist/content/gmail/injectGmailBadge.css"]
+    },
+    {
+      "matches": ["https://twitter.com/*", "https://x.com/*"],
+      "js": ["dist/content/twitter/injectTwitterBadge.js"],
+      "css": ["dist/content/twitter/injectTwitterBadge.css"],
+      "run_at": "document_idle"
     }
   ]
 }

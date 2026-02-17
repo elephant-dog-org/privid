@@ -1,0 +1,73 @@
+.privid-twitter-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+    cursor: pointer;
+    vertical-align: middle;
+    position: relative;
+}
+
+.privid-twitter-badge svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15));
+}
+
+.privid-twitter-badge:hover svg {
+    filter: drop-shadow(0 0 2px rgba(29, 161, 242, 0.8));
+}
+
+.privid-twitter-badge .privid-tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1a1a2e;
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    z-index: 10000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+}
+
+.privid-twitter-badge .privid-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border: 6px solid transparent;
+    border-top-color: #1a1a2e;
+}
+
+.privid-twitter-badge:hover .privid-tooltip {
+    display: block;
+}
+
+/* Adapt to Twitter/X dark mode */
+[data-color-mode="dark"] .privid-twitter-badge .privid-tooltip,
+.dark .privid-twitter-badge .privid-tooltip {
+    background: #e7e9ea;
+    color: #0f1419;
+}
+
+[data-color-mode="dark"] .privid-twitter-badge .privid-tooltip::after,
+.dark .privid-twitter-badge .privid-tooltip::after {
+    border-top-color: #e7e9ea;
+}
+
+/* Nudge for unverified own-profile */
+.privid-nudge {
+    opacity: 0.7;
+    transition: opacity 0.2s;
+}
+
+.privid-nudge:hover {
+    opacity: 1;
+}

@@ -479,3 +479,119 @@ button:disabled {
   font-size: 0.9em;
   text-align: center;
 }
+
+/* Link Accounts Section */
+.link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.link-row:last-child {
+  border-bottom: none;
+}
+
+.link-label {
+  min-width: 80px;
+  font-weight: 600;
+  font-size: 0.9em;
+}
+
+.link-input-group {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.link-input-group input {
+  flex: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-color-primary);
+  font-size: 0.85em;
+  font-family: 'Montserrat', sans-serif;
+}
+
+.btn-small {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--primary-color);
+  color: var(--text-color-primary);
+  cursor: pointer;
+  font-size: 0.85em;
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 500;
+  transition: background-color 0.2s;
+  width: auto;
+}
+
+.btn-small:hover {
+  background: var(--primary-hover);
+}
+
+.linked-badge {
+  color: #3bb273;
+  font-size: 0.85em;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.link-hint {
+  font-size: 0.8em;
+  color: var(--text-color-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* Onboarding Checklist (Phase 5) */
+.checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  text-align: left;
+}
+
+.checklist-item.completed {
+  opacity: 0.7;
+}
+
+.check-icon {
+  font-size: 18px;
+  line-height: 1;
+  min-width: 24px;
+  text-align: center;
+}
+
+.check-content strong {
+  display: block;
+  font-size: 13px;
+}
+
+.check-content p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--text-color-secondary);
+}
+
+.check-content a {
+  color: #1d9bf0;
+  text-decoration: none;
+}
+
+.check-content a:hover {
+  text-decoration: underline;
+}

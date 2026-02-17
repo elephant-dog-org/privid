@@ -355,6 +355,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     showEmailSection(walletAuth.address as string, null);
                 });
             }
+            // Show link accounts section when wallet is connected
+            loadLinkedPlatforms();
         } else {
             walletSignInBtn.textContent = 'Login Wallet';
             walletSignInBtn.dataset.walletConnected = 'false';
@@ -368,6 +370,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             // Hide email section when wallet disconnected
             hideEmailSection();
+            // Hide link accounts section when wallet disconnected
+            const linkSection = document.getElementById('linkAccountsSection');
+            if (linkSection) {
+                linkSection.style.display = 'none';
+            }
         }
     }
 
@@ -380,6 +387,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Don't call updateWalletAuthState in mock mode
             if (!result.mockMode) {
                 updateWalletAuthState();
+                loadLinkedPlatforms();
             }
             // Toggle button containers on load
             if (realButtons && mockButtons) {
@@ -420,9 +428,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                         mockButtons.style.display = 'none';
                     }
                 }
-                // Hide email section in mock mode, restore in real mode
+                // Hide email and link sections in mock mode, restore in real mode
                 if (mockToggle.checked) {
                     hideEmailSection();
+                    const linkSection = document.getElementById('linkAccountsSection');
+                    if (linkSection) linkSection.style.display = 'none';
+                } else {
+                    loadLinkedPlatforms();
                 }
                 // Hide modal if switching to mock mode
                 if (mockToggle.checked && loginModal)
@@ -691,6 +703,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
                 // Hide email section
                 hideEmailSection();
+                // Hide link accounts section
+                const linkSection = document.getElementById('linkAccountsSection');
+                if (linkSection) linkSection.style.display = 'none';
             } else {
                 // Open wallet modal
                 if (walletModal) {
@@ -838,6 +853,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                         showEmailSection(recoveredAddress, null);
                     });
 
+                // Show link accounts section after wallet connects
+                loadLinkedPlatforms();
+
                 // Auto-close modal after 1 second
                 setTimeout(() => {
                     if (walletModal) walletModal.style.display = 'none';
@@ -856,6 +874,121 @@ document.addEventListener('DOMContentLoaded', async () => {
                 walletSignInModalBtn.textContent = 'Sign In';
             }
         });
+    }
+
+    // Link Twitter button handler
+    const linkTwitterBtn = document.getElementById(
+        'linkTwitterBtn'
+    ) as HTMLButtonElement | null;
+    if (linkTwitterBtn) {
+        linkTwitterBtn.addEventListener('click', async () => {
+            const input = document.getElementById(
+                'twitterHandleInput'
+            ) as HTMLInputElement;
+            const handle = input.value
+                .trim()
+                .replace(/^@/, '')
+                .toLowerCase();
+            if (!handle) return;
+
+            // Get current wallet info
+            const data = await browser.storage.local.get([
+                'walletAuth',
+                'verification'
+            ]);
+            const walletAuth = data.walletAuth as
+                | { address?: string }
+                | undefined;
+            const verification = data.verification as
+                | { verified?: boolean; verificationType?: string }
+                | undefined;
+
+            if (!walletAuth?.address) {
+                alert('Connect wallet first');
+                return;
+            }
+
+            // Build registry entry for this handle
+            const entry = {
+                walletAddress: walletAuth.address,
+                ensName: '',
+                sbtTypes: verification?.verificationType
+                    ? [verification.verificationType]
+                    : [],
+                verified: !!verification?.verified,
+                linkedAt: new Date().toISOString()
+            };
+
+            // Store in twitterRegistry (used by content script)
+            const registryData = await browser.storage.local.get([
+                'twitterRegistry'
+            ]);
+            const registry = (registryData.twitterRegistry as Record<
+                string,
+                unknown
+            >) || {};
+            registry[handle] = entry;
+            await browser.storage.local.set({ twitterRegistry: registry });
+
+            // Store in linkedPlatforms for UI
+            const platformsData = await browser.storage.local.get([
+                'linkedPlatforms'
+            ]);
+            const platforms = (platformsData.linkedPlatforms as Record<
+                string,
+                string
+            >) || {};
+            platforms.twitter = handle;
+            await browser.storage.local.set({ linkedPlatforms: platforms });
+
+            // Update UI
+            input.style.display = 'none';
+            linkTwitterBtn.style.display = 'none';
+            const linkedBadge = document.getElementById('twitterLinked');
+            if (linkedBadge) {
+                linkedBadge.textContent = `@${handle}`;
+                linkedBadge.style.display = 'inline';
+            }
+        });
+    }
+
+    // Load linked platforms state on popup open
+    async function loadLinkedPlatforms() {
+        const data = await browser.storage.local.get([
+            'linkedPlatforms',
+            'walletAuth'
+        ]);
+        const walletAuth = data.walletAuth as
+            | { address?: string }
+            | undefined;
+        if (!walletAuth?.address) return;
+
+        const linkSection = document.getElementById('linkAccountsSection');
+        if (linkSection) {
+            linkSection.style.display = 'block';
+        }
+
+        const platforms = data.linkedPlatforms as
+            | Record<string, string>
+            | undefined;
+        if (platforms?.twitter) {
+            const handle = platforms.twitter;
+            const input = document.getElementById(
+                'twitterHandleInput'
+            ) as HTMLInputElement | null;
+            if (input) input.style.display = 'none';
+
+            const btn = document.getElementById(
+                'linkTwitterBtn'
+            ) as HTMLButtonElement | null;
+            if (btn) btn.style.display = 'none';
+
+            const linkedBadge = document.getElementById('twitterLinked');
+            if (linkedBadge) {
+                linkedBadge.textContent = `@${handle}`;
+                linkedBadge.style.display = 'inline';
+            }
+        }
     }
 
     // Register Email button handler
@@ -1110,4 +1243,73 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await updateAtprotoButtonState();
     attachSimulateListener();
+
+    // ── Onboarding Checklist (Phase 5) ──
+
+    async function updateOnboardingChecklist(): Promise<void> {
+        const onboardingSection = document.getElementById('onboardingSection');
+        if (!onboardingSection) return;
+
+        const data = await browser.storage.local.get([
+            'walletAuth',
+            'verification',
+            'linkedPlatforms',
+            'twitterRegistry'
+        ]);
+
+        const walletConnected = !!(
+            data.walletAuth &&
+            typeof data.walletAuth === 'object' &&
+            'address' in data.walletAuth &&
+            data.walletAuth.address
+        );
+        const hasVerification = !!(
+            data.verification &&
+            typeof data.verification === 'object' &&
+            'verified' in data.verification &&
+            data.verification.verified
+        );
+        const linkedPlatforms = data.linkedPlatforms as
+            | Record<string, string>
+            | undefined;
+        const hasLinkedTwitter = !!linkedPlatforms?.twitter;
+        const registrySize = Object.keys(data.twitterRegistry || {}).length;
+
+        // Only show if wallet connected but not fully set up
+        if (!walletConnected) {
+            onboardingSection.style.display = 'none';
+            return;
+        }
+
+        // If fully verified and registered, hide onboarding
+        if (hasVerification && hasLinkedTwitter) {
+            onboardingSection.style.display = 'none';
+            return;
+        }
+
+        onboardingSection.style.display = 'block';
+
+        // Update checkmarks
+        setOnboardingCheck('check-wallet', walletConnected);
+        setOnboardingCheck('check-passport', hasVerification);
+        // ENS and text records: cannot easily check client-side without RPC calls
+        // Leave as unchecked by default (user verifies manually)
+        setOnboardingCheck('check-ens', false);
+        setOnboardingCheck('check-records', false);
+        setOnboardingCheck(
+            'check-register',
+            hasLinkedTwitter || registrySize > 0
+        );
+    }
+
+    function setOnboardingCheck(id: string, done: boolean): void {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = done ? '\u2705' : '\u2B1C'; // green checkmark or white square
+            el.parentElement?.classList.toggle('completed', done);
+        }
+    }
+
+    // Call on popup load
+    updateOnboardingChecklist();
 });

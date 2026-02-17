@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
-use tokio::sync::RwLock;
-use log::info;
 use anyhow::Result;
 
 use crate::blockchain::types::VerificationType;
+use crate::db::{Database, PlatformLink};
 
 /// A registered user linking their Telegram identity to an ENS name and wallet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,123 +32,117 @@ impl RegistrationEntry {
     }
 }
 
-/// Persistent registry mapping Telegram users to ENS names and wallets.
-///
-/// Maintains two indexes:
-/// - `by_user_id`: telegram_user_id → RegistrationEntry
-/// - `by_username`: lowercase telegram_username → telegram_user_id
+/// Persistent registry backed by SQLite via Database.
 pub struct Registry {
-    by_user_id: RwLock<HashMap<u64, RegistrationEntry>>,
-    by_username: RwLock<HashMap<String, u64>>,
-    file_path: PathBuf,
+    db: Arc<Database>,
 }
 
 impl Registry {
-    pub fn new(file_path: PathBuf) -> Self {
-        Self {
-            by_user_id: RwLock::new(HashMap::new()),
-            by_username: RwLock::new(HashMap::new()),
-            file_path,
-        }
-    }
-
-    /// Load registry from disk.
-    pub async fn load(&self) -> Result<()> {
-        if !self.file_path.exists() {
-            info!("Registry file does not exist, starting empty");
-            return Ok(());
-        }
-
-        let content = fs::read_to_string(&self.file_path).await?;
-        let entries: Vec<RegistrationEntry> = serde_json::from_str(&content)?;
-
-        let mut by_id = self.by_user_id.write().await;
-        let mut by_name = self.by_username.write().await;
-
-        for entry in entries {
-            by_name.insert(entry.telegram_username.to_lowercase(), entry.telegram_user_id);
-            by_id.insert(entry.telegram_user_id, entry);
-        }
-
-        info!("Loaded {} registrations from disk", by_id.len());
-        Ok(())
-    }
-
-    /// Persist registry to disk.
-    pub async fn save(&self) -> Result<()> {
-        if let Some(parent) = self.file_path.parent() {
-            if !parent.exists() {
-                fs::create_dir_all(parent).await?;
-            }
-        }
-
-        let by_id = self.by_user_id.read().await;
-        let entries: Vec<&RegistrationEntry> = by_id.values().collect();
-        let json = serde_json::to_string_pretty(&entries)?;
-        fs::write(&self.file_path, json).await?;
-        info!("Saved {} registrations to disk", entries.len());
-        Ok(())
+    pub fn new(db: Arc<Database>) -> Self {
+        Self { db }
     }
 
     /// Register a user. Overwrites any existing registration for this user_id.
     pub async fn register(&self, entry: RegistrationEntry) {
-        let user_id = entry.telegram_user_id;
-        let username = entry.telegram_username.to_lowercase();
-
-        // Remove old username mapping if the user was previously registered
-        {
-            let by_id = self.by_user_id.read().await;
-            if let Some(old) = by_id.get(&user_id) {
-                let mut by_name = self.by_username.write().await;
-                by_name.remove(&old.telegram_username.to_lowercase());
-            }
+        if let Err(e) = self.db.register_identity(&entry).await {
+            log::warn!("Failed to register identity: {}", e);
         }
-
-        let mut by_name = self.by_username.write().await;
-        by_name.insert(username, user_id);
-        drop(by_name);
-
-        let mut by_id = self.by_user_id.write().await;
-        by_id.insert(user_id, entry);
     }
 
     /// Remove a user's registration.
     pub async fn deregister(&self, user_id: u64) -> bool {
-        let mut by_id = self.by_user_id.write().await;
-        if let Some(entry) = by_id.remove(&user_id) {
-            let mut by_name = self.by_username.write().await;
-            by_name.remove(&entry.telegram_username.to_lowercase());
-            true
-        } else {
-            false
+        match self.db.deregister_identity(user_id).await {
+            Ok(removed) => removed,
+            Err(e) => {
+                log::warn!("Failed to deregister identity: {}", e);
+                false
+            }
         }
     }
 
     /// Look up a registration by Telegram user ID.
     pub async fn lookup_by_user_id(&self, user_id: u64) -> Option<RegistrationEntry> {
-        let by_id = self.by_user_id.read().await;
-        by_id.get(&user_id).cloned()
+        match self.db.lookup_by_user_id(user_id).await {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!("Failed to lookup by user_id: {}", e);
+                None
+            }
+        }
     }
 
     /// Look up a registration by Telegram username (case-insensitive).
     pub async fn lookup_by_username(&self, username: &str) -> Option<RegistrationEntry> {
-        let clean = username.strip_prefix('@').unwrap_or(username).to_lowercase();
-        let by_name = self.by_username.read().await;
-        let user_id = by_name.get(&clean)?;
-        let by_id = self.by_user_id.read().await;
-        by_id.get(user_id).cloned()
+        match self.db.lookup_by_username(username).await {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!("Failed to lookup by username: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Look up a registration by Twitter handle (via platform links).
+    pub async fn lookup_by_twitter_handle(&self, handle: &str) -> Option<RegistrationEntry> {
+        match self.db.lookup_by_twitter_handle(handle).await {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!("Failed to lookup by twitter handle: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Look up a registration by wallet address.
+    pub async fn lookup_by_wallet(&self, wallet: &str) -> Option<RegistrationEntry> {
+        match self.db.lookup_by_wallet(wallet).await {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!("Failed to lookup by wallet: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Link a platform handle to a user.
+    pub async fn link_platform(
+        &self,
+        user_id: u64,
+        platform: &str,
+        handle: &str,
+        verified_via_ens: bool,
+    ) -> Result<()> {
+        self.db
+            .link_platform(user_id, platform, handle, verified_via_ens)
+            .await
+    }
+
+    /// Get all platform links for a user.
+    pub async fn get_platform_links(&self, user_id: u64) -> Result<Vec<PlatformLink>> {
+        self.db.get_platform_links(user_id).await
     }
 
     /// Get total number of registrations.
     pub async fn count(&self) -> usize {
-        self.by_user_id.read().await.len()
+        match self.db.count().await {
+            Ok(n) => n,
+            Err(e) => {
+                log::warn!("Failed to count registrations: {}", e);
+                0
+            }
+        }
+    }
+
+    /// No-op for backward compatibility. SQLite handles persistence automatically.
+    pub async fn save(&self) -> Result<()> {
+        // SQLite writes are immediate; nothing to flush.
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     fn make_entry(user_id: u64, username: &str, ens: &str) -> RegistrationEntry {
         let now = chrono::Utc::now();
@@ -168,9 +159,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_and_lookup() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("registry.json");
-        let registry = Registry::new(path);
+        let db = Arc::new(Database::new_in_memory().await.unwrap());
+        let registry = Registry::new(db);
 
         let entry = make_entry(123, "alice", "alice.eth");
         registry.register(entry).await;
@@ -182,11 +172,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_lookup_by_username() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("registry.json");
-        let registry = Registry::new(path);
+        let db = Arc::new(Database::new_in_memory().await.unwrap());
+        let registry = Registry::new(db);
 
-        registry.register(make_entry(123, "Alice", "alice.eth")).await;
+        registry
+            .register(make_entry(123, "Alice", "alice.eth"))
+            .await;
 
         // Case-insensitive lookup
         let found = registry.lookup_by_username("alice").await;
@@ -203,11 +194,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_deregister() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("registry.json");
-        let registry = Registry::new(path);
+        let db = Arc::new(Database::new_in_memory().await.unwrap());
+        let registry = Registry::new(db);
 
-        registry.register(make_entry(123, "alice", "alice.eth")).await;
+        registry
+            .register(make_entry(123, "alice", "alice.eth"))
+            .await;
         assert_eq!(registry.count().await, 1);
 
         let removed = registry.deregister(123).await;
@@ -220,39 +212,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_reregister_updates_username_index() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("registry.json");
-        let registry = Registry::new(path);
+        let db = Arc::new(Database::new_in_memory().await.unwrap());
+        let registry = Registry::new(db);
 
-        registry.register(make_entry(123, "oldname", "alice.eth")).await;
-        registry.register(make_entry(123, "newname", "alice.eth")).await;
+        registry
+            .register(make_entry(123, "oldname", "alice.eth"))
+            .await;
+        registry
+            .register(make_entry(123, "newname", "alice.eth"))
+            .await;
 
         assert!(registry.lookup_by_username("oldname").await.is_none());
         assert!(registry.lookup_by_username("newname").await.is_some());
         assert_eq!(registry.count().await, 1);
-    }
-
-    #[tokio::test]
-    async fn test_save_and_load() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("registry.json");
-
-        // Save
-        {
-            let registry = Registry::new(path.clone());
-            registry.register(make_entry(1, "alice", "alice.eth")).await;
-            registry.register(make_entry(2, "bob", "bob.eth")).await;
-            registry.save().await.unwrap();
-        }
-
-        // Load in fresh instance
-        {
-            let registry = Registry::new(path);
-            registry.load().await.unwrap();
-            assert_eq!(registry.count().await, 2);
-            assert!(registry.lookup_by_username("alice").await.is_some());
-            assert!(registry.lookup_by_username("bob").await.is_some());
-        }
     }
 
     #[tokio::test]

@@ -81,6 +81,88 @@
                 <button id="registerEmailBtn">Register Email</button>
                 <div id="emailStatus" class="email-status"></div>
             </div>
+            <!-- Link Accounts Section -->
+            <div id="linkAccountsSection" style="display: none">
+                <div class="section-divider"></div>
+                <h3 class="section-title">Link Accounts</h3>
+                <p class="section-desc">
+                    Link your social accounts to show verification badges
+                    across platforms.
+                </p>
+                <div id="linkedPlatforms"></div>
+                <div class="link-row">
+                    <label class="link-label">Twitter</label>
+                    <div class="link-input-group">
+                        <input
+                            type="text"
+                            id="twitterHandleInput"
+                            placeholder="@yourhandle"
+                        />
+                        <button id="linkTwitterBtn" class="btn-small">
+                            Link
+                        </button>
+                    </div>
+                    <span
+                        id="twitterLinked"
+                        class="linked-badge"
+                        style="display: none"
+                    ></span>
+                </div>
+                <div class="link-row">
+                    <label class="link-label">Telegram</label>
+                    <p class="link-hint">
+                        DM @AskPrivID_bot with /register yourname.eth
+                    </p>
+                </div>
+            </div>
+            <!-- Onboarding Checklist Section (Phase 5) -->
+            <div id="onboardingSection" style="display: none;">
+                <div class="section-divider"></div>
+                <h3 class="section-title">Get Verified</h3>
+                <p class="section-desc">Complete these steps to get your verification badge across all platforms.</p>
+
+                <div class="checklist">
+                    <div class="checklist-item" id="step-wallet">
+                        <span class="check-icon" id="check-wallet"></span>
+                        <div class="check-content">
+                            <strong>Connect Wallet</strong>
+                            <p>Connect your Ethereum wallet to get started</p>
+                        </div>
+                    </div>
+
+                    <div class="checklist-item" id="step-passport">
+                        <span class="check-icon" id="check-passport"></span>
+                        <div class="check-content">
+                            <strong>Get Human Passport</strong>
+                            <p>Verify your identity at <a href="https://app.passport.xyz" target="_blank">app.passport.xyz</a></p>
+                        </div>
+                    </div>
+
+                    <div class="checklist-item" id="step-ens">
+                        <span class="check-icon" id="check-ens"></span>
+                        <div class="check-content">
+                            <strong>Get an ENS Name</strong>
+                            <p>Register at <a href="https://app.ens.domains" target="_blank">app.ens.domains</a></p>
+                        </div>
+                    </div>
+
+                    <div class="checklist-item" id="step-records">
+                        <span class="check-icon" id="check-records"></span>
+                        <div class="check-content">
+                            <strong>Set Text Records</strong>
+                            <p>Add org.telegram and com.twitter to your ENS name</p>
+                        </div>
+                    </div>
+
+                    <div class="checklist-item" id="step-register">
+                        <span class="check-icon" id="check-register"></span>
+                        <div class="check-content">
+                            <strong>Register with PrivID</strong>
+                            <p>Link your Twitter handle above or DM @AskPrivID_bot on Telegram</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
         <!-- Login Modal -->
         <div id="loginModal" class="modal" style="display: none">

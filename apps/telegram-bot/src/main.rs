@@ -1,5 +1,6 @@
 mod blockchain;
 mod config;
+mod db;
 mod ens;
 mod registry;
 mod state;
@@ -9,7 +10,7 @@ mod verification;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters};
 use teloxide::utils::command::BotCommands;
-use log::{info, warn};
+use log::{debug, info, warn};
 use dotenv::dotenv;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use tokio::sync::RwLock;
 use crate::blockchain::types::VerificationType;
 use crate::config::{Config, VerificationMode};
 use crate::ens::resolver::EnsResolver;
+use crate::db::Database;
 use crate::registry::{Registry, RegistrationEntry};
 use crate::state::BotState;
 use crate::storage::FileStorage;
@@ -307,23 +309,23 @@ async fn handle_command(
                     last_verified: now,
                 };
 
-                registry.register(entry).await;
+                registry.register(entry.clone()).await;
                 if let Err(e) = registry.save().await {
                     warn!("Failed to save registry: {}", e);
                 }
 
-                bot.send_message(
-                    msg.chat.id,
-                    format!(
-                        "\u{2705} Registered! (mock mode)\n\n\
-                         ENS: {}\n\
-                         Username: @{}\n\
-                         Mock SBTs: KYC, Phone\n\n\
-                         I'll badge you in group chats now.",
-                        ens_name, username
-                    ),
-                )
-                .await?;
+                let mut success_msg = format!(
+                    "\u{2705} Registered! (mock mode)\n\n\
+                     ENS: {}\n\
+                     Username: @{}\n\
+                     Mock SBTs: KYC, Phone",
+                    ens_name, username
+                );
+
+                // In mock mode, skip ENS text record lookup but still allow manual linking later
+                success_msg.push_str("\n\nI'll badge you in group chats now.");
+
+                bot.send_message(msg.chat.id, success_msg).await?;
             } else {
                 // Blockchain mode: verify ENS org.telegram record
                 let tg_record = match ens_resolver.get_text_record(&ens_name, "org.telegram").await {
@@ -401,7 +403,7 @@ async fn handle_command(
                     last_verified: now,
                 };
 
-                registry.register(entry).await;
+                registry.register(entry.clone()).await;
                 if let Err(e) = registry.save().await {
                     warn!("Failed to save registry: {}", e);
                 }
@@ -412,17 +414,41 @@ async fn handle_command(
                     verified_types.iter().map(|v| v.short_name()).collect::<Vec<_>>().join(", ")
                 };
 
+                // Try to capture Twitter handle from ENS com.twitter text record
+                let mut twitter_line = String::new();
+                match ens_resolver.get_text_record(&ens_name, "com.twitter").await {
+                    Ok(twitter) => {
+                        if !twitter.is_empty() {
+                            let clean_handle = twitter.strip_prefix('@').unwrap_or(&twitter);
+                            match registry.link_platform(entry.telegram_user_id, "twitter", clean_handle, true).await {
+                                Ok(()) => {
+                                    twitter_line = format!("\nTwitter: @{}", clean_handle);
+                                    info!("Linked Twitter @{} for user {}", clean_handle, username);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to link Twitter handle: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Not an error -- many users won't have com.twitter set
+                        debug!("No com.twitter record for {}: {}", ens_name, e);
+                    }
+                }
+
                 bot.send_message(
                     msg.chat.id,
                     format!(
                         "\u{2705} Registered!\n\n\
                          ENS: {}\n\
                          Wallet: {}\n\
-                         SBTs: {}\n\n\
+                         SBTs: {}{}\n\n\
                          I'll badge you in group chats now.",
                         ens_name,
                         short_addr(&wallet_address),
                         sbt_list,
+                        twitter_line,
                     ),
                 )
                 .await?;
@@ -536,7 +562,7 @@ async fn handle_command(
 
             // Check registry first
             if let Some(entry) = registry.lookup_by_user_id(user_id).await {
-                let text = format!(
+                let mut text = format!(
                     "Registration Status: Active\n\n\
                      ENS: {}\n\
                      Wallet: {}\n\
@@ -549,6 +575,26 @@ async fn handle_command(
                     entry.registered_at.format("%Y-%m-%d %H:%M UTC"),
                     entry.last_verified.format("%Y-%m-%d %H:%M UTC"),
                 );
+
+                // Show linked platforms
+                if let Ok(links) = registry.get_platform_links(user_id).await {
+                    if !links.is_empty() {
+                        text.push_str("\n\n\u{1f4f1} Linked Platforms:");
+                        for link in &links {
+                            let icon = match link.platform.as_str() {
+                                "twitter" => "\u{1f426}",
+                                "email" => "\u{1f4e7}",
+                                _ => "\u{1f517}",
+                            };
+                            let verified_tag = if link.verified_via_ens { " (ENS)" } else { "" };
+                            text.push_str(&format!(
+                                "\n{} {}: @{}{}",
+                                icon, link.platform, link.handle, verified_tag
+                            ));
+                        }
+                    }
+                }
+
                 bot.send_message(msg.chat.id, text).await?;
             } else {
                 bot.send_message(
@@ -751,13 +797,24 @@ async fn main() {
     }
     let shared_state: Arc<BotState> = Arc::new(bot_state);
 
-    // Identity registry
-    let registry_path = PathBuf::from("data/registry.json");
-    let registry = Registry::new(registry_path);
-    if let Err(e) = registry.load().await {
-        warn!("Failed to load registry: {}", e);
+    // SQLite database
+    let database = match Database::new("data/privid.db").await {
+        Ok(db) => Arc::new(db),
+        Err(e) => {
+            panic!("Failed to initialize database: {}", e);
+        }
+    };
+
+    // Migrate from JSON if registry.json exists
+    let registry_json_path = "data/registry.json";
+    match database.migrate_from_json(registry_json_path).await {
+        Ok(0) => {} // No file to migrate, or empty
+        Ok(n) => info!("Migrated {} registrations from JSON to SQLite", n),
+        Err(e) => warn!("Failed to migrate registry from JSON: {}", e),
     }
-    let shared_registry: Arc<Registry> = Arc::new(registry);
+
+    // Identity registry (SQLite-backed)
+    let shared_registry: Arc<Registry> = Arc::new(Registry::new(database.clone()));
     info!("Registry: {} registrations loaded", shared_registry.count().await);
 
     // ENS resolver (Ethereum mainnet)
