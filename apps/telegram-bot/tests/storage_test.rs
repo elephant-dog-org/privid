@@ -19,6 +19,9 @@ async fn test_file_storage() {
         timestamp: "2024-01-01T00:00:00Z".to_string(),
         proof: "test-proof-123".to_string(),
         badge: "Test Badge".to_string(),
+        verification_type: None,
+        wallet_address: None,
+        sbt_expiry: None,
     };
     session.update_verification_state(VerificationState::Completed { verification_result: mock_result });
     

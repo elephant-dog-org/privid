@@ -1,0 +1,17 @@
+.privid-email-badge {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin-left: 4px;
+    line-height: 1;
+    cursor: default;
+}
+.privid-email-badge svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+    filter: drop-shadow(0 0 1px rgba(29, 161, 242, 0.6));
+}
+.privid-email-badge:hover svg {
+    filter: drop-shadow(0 0 2px rgba(29, 161, 242, 0.8));
+}

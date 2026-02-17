@@ -47,3 +47,19 @@ export const createRealVerificationResult = (
         sbtData
     };
 };
+
+export interface EmailRegistration {
+    emailHash: string;
+    walletAddress: string;
+    ensName?: string;
+    ensVerified: boolean; // true if ENS email text record matches
+    registeredAt: string;
+    txHash?: string;
+}
+
+export interface EmailLookupResult {
+    walletAddress: string | null;
+    verified: boolean;
+    verificationTypes: string[];
+    ensName?: string;
+}

@@ -7,7 +7,8 @@ import {
 import {
     createRealVerificationResult,
     RealVerificationResult,
-    VerificationResults
+    VerificationResults,
+    EmailRegistration
 } from './types/verification';
 import { icons } from './utils/icons';
 import { publishVerificationPost } from './api/atproto';
@@ -27,6 +28,20 @@ async function loadBlockchainUtils() {
         verificationTypeToSBTPair = blockchainUtils.verificationTypeToSBTPair;
         getSBTByCircuitId = blockchainUtils.getSBTByCircuitId;
         getHubContract = blockchainUtils.getHubContract;
+    }
+}
+
+// Dynamic imports for email lookup functionality
+let resolveENSEmail: (
+    address: string
+) => Promise<{ ensName: string; email: string } | null>;
+let hashEmail: (email: string) => string;
+
+async function loadEmailLookupUtils() {
+    if (!resolveENSEmail) {
+        const emailLookup = await import('../blockchain/emailLookup');
+        resolveENSEmail = emailLookup.resolveENSEmail;
+        hashEmail = emailLookup.hashEmail;
     }
 }
 
@@ -101,6 +116,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const checkVerificationBtn = document.getElementById(
         'checkVerificationBtn'
     ) as HTMLButtonElement;
+    // Email Anti-Phishing section elements
+    const emailSection = document.getElementById(
+        'emailSection'
+    ) as HTMLDivElement;
+    const ensStatus = document.getElementById('ensStatus') as HTMLDivElement;
+    const emailInput = document.getElementById(
+        'emailInput'
+    ) as HTMLInputElement;
+    const registerEmailBtn = document.getElementById(
+        'registerEmailBtn'
+    ) as HTMLButtonElement;
+    const emailStatus = document.getElementById(
+        'emailStatus'
+    ) as HTMLDivElement;
 
     type VerificationState = 'unverified' | 'verifying' | 'verified';
     interface StatusConfig {
@@ -171,6 +200,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (checkVerificationBtn) {
             checkVerificationBtn.style.display = 'none';
         }
+        // Hide email section in mock mode
+        if (mockMode) {
+            hideEmailSection();
+        }
 
         if (!loginBtn) return;
         if (mockMode) {
@@ -229,6 +262,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         loginBtn.style.display = 'block';
     }
 
+    // Helper to show the email anti-phishing section with ENS info
+    function showEmailSection(
+        address: string,
+        ensResult: { ensName: string; email: string } | null
+    ) {
+        if (!emailSection) return;
+
+        emailSection.style.display = 'block';
+
+        if (ensResult && ensStatus) {
+            ensStatus.style.display = 'block';
+            if (ensResult.email) {
+                ensStatus.innerHTML = `ENS: <strong>${ensResult.ensName}</strong><br/>Email: ${ensResult.email}`;
+            } else {
+                ensStatus.innerHTML = `ENS: <strong>${ensResult.ensName}</strong><br/><span style="color: #999;">No email record set</span>`;
+            }
+        } else if (ensStatus) {
+            ensStatus.style.display = 'block';
+            ensStatus.innerHTML =
+                '<span style="color: #999;">No ENS name found</span>';
+        }
+    }
+
+    // Helper to hide the email anti-phishing section
+    function hideEmailSection() {
+        if (emailSection) {
+            emailSection.style.display = 'none';
+        }
+    }
+
     // Helper to check and update wallet authentication state
     async function updateWalletAuthState() {
         if (!walletSignInBtn) return;
@@ -278,6 +341,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (checkVerificationBtn) {
                 checkVerificationBtn.style.display = 'block';
             }
+            // Show email section and resolve ENS (only if not mock mode)
+            const { mockMode: currentMockMode } =
+                await browser.storage.local.get(['mockMode']);
+            if (!currentMockMode && walletAuth && typeof walletAuth === 'object' && 'address' in walletAuth) {
+                loadEmailLookupUtils().then(async () => {
+                    const ensResult = await resolveENSEmail(
+                        walletAuth.address as string
+                    );
+                    showEmailSection(walletAuth.address as string, ensResult);
+                }).catch((err) => {
+                    console.log('[PrivID] ENS lookup failed:', err);
+                    showEmailSection(walletAuth.address as string, null);
+                });
+            }
         } else {
             walletSignInBtn.textContent = 'Login Wallet';
             walletSignInBtn.dataset.walletConnected = 'false';
@@ -289,6 +366,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (checkVerificationBtn) {
                 checkVerificationBtn.style.display = 'none';
             }
+            // Hide email section when wallet disconnected
+            hideEmailSection();
         }
     }
 
@@ -340,6 +419,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                         realButtons.style.display = 'block';
                         mockButtons.style.display = 'none';
                     }
+                }
+                // Hide email section in mock mode, restore in real mode
+                if (mockToggle.checked) {
+                    hideEmailSection();
                 }
                 // Hide modal if switching to mock mode
                 if (mockToggle.checked && loginModal)
@@ -606,6 +689,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (checkVerificationBtn) {
                     checkVerificationBtn.style.display = 'none';
                 }
+                // Hide email section
+                hideEmailSection();
             } else {
                 // Open wallet modal
                 if (walletModal) {
@@ -741,6 +826,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                     checkVerificationBtn.style.display = 'block';
                 }
 
+                // After wallet connects, check ENS and show email section
+                loadEmailLookupUtils()
+                    .then(async () => {
+                        const ensResult =
+                            await resolveENSEmail(recoveredAddress);
+                        showEmailSection(recoveredAddress, ensResult);
+                    })
+                    .catch((err) => {
+                        console.log('[PrivID] ENS lookup failed:', err);
+                        showEmailSection(recoveredAddress, null);
+                    });
+
                 // Auto-close modal after 1 second
                 setTimeout(() => {
                     if (walletModal) walletModal.style.display = 'none';
@@ -757,6 +854,64 @@ document.addEventListener('DOMContentLoaded', async () => {
             } finally {
                 walletSignInModalBtn.disabled = false;
                 walletSignInModalBtn.textContent = 'Sign In';
+            }
+        });
+    }
+
+    // Register Email button handler
+    if (registerEmailBtn) {
+        registerEmailBtn.addEventListener('click', async () => {
+            const email = emailInput.value.trim();
+            if (!email || !email.includes('@')) {
+                emailStatus.innerHTML =
+                    '<span style="color: #c00;">Please enter a valid email address</span>';
+                return;
+            }
+
+            registerEmailBtn.disabled = true;
+            registerEmailBtn.textContent = 'Registering...';
+            emailStatus.innerHTML = '';
+
+            try {
+                await loadEmailLookupUtils();
+                const emailHash = hashEmail(email);
+
+                // Get the connected wallet address
+                const { walletAuth } = await browser.storage.local.get([
+                    'walletAuth'
+                ]);
+                if (
+                    !walletAuth ||
+                    typeof walletAuth !== 'object' ||
+                    !('address' in walletAuth)
+                ) {
+                    throw new Error('No wallet connected');
+                }
+
+                const registration: EmailRegistration = {
+                    emailHash,
+                    walletAddress: walletAuth.address as string,
+                    ensVerified: false,
+                    registeredAt: new Date().toISOString()
+                };
+
+                // Store locally (on-chain registration pending contract deployment)
+                await browser.storage.local.set({
+                    emailRegistration: registration
+                });
+
+                emailStatus.innerHTML =
+                    '<span style="color: #0a0;">Email registered locally! On-chain registration coming soon.</span>';
+                emailInput.value = '';
+            } catch (err) {
+                const msg =
+                    err instanceof Error
+                        ? err.message
+                        : 'Registration failed';
+                emailStatus.innerHTML = `<span style="color: #c00;">${msg}</span>`;
+            } finally {
+                registerEmailBtn.disabled = false;
+                registerEmailBtn.textContent = 'Register Email';
             }
         });
     }

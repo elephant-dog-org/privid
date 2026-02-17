@@ -14,6 +14,11 @@
       "matches": ["https://bsky.app/profile/*"],
       "js": ["dist/content/injectBadge.js"],
       "css": ["dist/content/injectBadge.css"]
+    },
+    {
+      "matches": ["https://mail.google.com/*"],
+      "js": ["dist/content/gmail/injectGmailBadge.js"],
+      "css": ["dist/content/gmail/injectGmailBadge.css"]
     }
   ]
 }

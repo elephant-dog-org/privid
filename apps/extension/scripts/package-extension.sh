@@ -23,6 +23,10 @@ bun run build
 mkdir -p dist/content
 cp content/injectBadge.css dist/content/injectBadge.css
 
+# Copy Gmail content CSS to dist/content/gmail/
+mkdir -p dist/content/gmail
+cp content/gmail/injectGmailBadge.css dist/content/gmail/injectGmailBadge.css
+
 # Copy necessary files to build/
 cp manifest.json build/
 cp -r popup build/

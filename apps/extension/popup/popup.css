@@ -430,3 +430,52 @@ button:disabled {
   color: #b00;
   font-weight: 500;
 }
+
+/* Email Anti-Phishing Section */
+.section-divider {
+  margin: 18px 0 12px 0;
+  border-top: 1px solid var(--border-color);
+  width: 100%;
+}
+
+.section-title {
+  font-size: 1.1em;
+  font-weight: 600;
+  margin: 0 0 4px 0;
+  text-align: center;
+}
+
+.section-desc {
+  font-size: 0.85em;
+  color: var(--text-color-secondary);
+  margin: 0 0 12px 0;
+  text-align: center;
+}
+
+.ens-status {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 0.85em;
+  margin-bottom: 10px;
+  text-align: left;
+  line-height: 1.5;
+}
+
+#emailInput {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font-size: 1em;
+  font-family: 'Montserrat', sans-serif;
+  box-sizing: border-box;
+}
+
+.email-status {
+  margin-top: 8px;
+  font-size: 0.9em;
+  text-align: center;
+}

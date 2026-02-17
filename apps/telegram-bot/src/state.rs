@@ -10,6 +10,15 @@ pub struct VerificationResult {
     pub timestamp: String,
     pub proof: String,
     pub badge: String,
+    /// The type of verification (e.g., "KYC (Know Your Customer)")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_type: Option<String>,
+    /// The wallet address that was verified
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet_address: Option<String>,
+    /// Unix timestamp when the SBT expires
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sbt_expiry: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +68,9 @@ impl UserSession {
             timestamp: chrono::Utc::now().to_rfc3339(),
             proof: format!("mock-zk-proof-{}", random_proof_id),
             badge: badge_strings[random_index].to_string(),
+            verification_type: None,
+            wallet_address: None,
+            sbt_expiry: None,
         }
     }
 }

@@ -20,10 +20,13 @@ async fn test_bot_state_management() {
         timestamp: "2024-01-01T00:00:00Z".to_string(),
         proof: "test-proof".to_string(),
         badge: "Test Badge".to_string(),
+        verification_type: None,
+        wallet_address: None,
+        sbt_expiry: None,
     };
     updated_session.update_verification_state(VerificationState::Completed { verification_result: mock_result });
     state.update_session(12345, updated_session.clone()).await;
-    
+
     let retrieved_session = state.get_session(12345).await.unwrap();
     assert!(matches!(retrieved_session.verification_state, VerificationState::Completed { .. }));
 }
@@ -32,7 +35,7 @@ async fn test_bot_state_management() {
 async fn test_mock_verification_result_generation() {
     let result1 = UserSession::generate_mock_verification_result();
     let result2 = UserSession::generate_mock_verification_result();
-    
+
     // Test that results are generated correctly
     assert!(result1.verified);
     assert!(result2.verified);
@@ -42,7 +45,7 @@ async fn test_mock_verification_result_generation() {
     assert!(!result2.badge.is_empty());
     assert!(!result1.timestamp.is_empty());
     assert!(!result2.timestamp.is_empty());
-    
+
     // Test that different calls generate different results
     assert_ne!(result1.proof, result2.proof);
 }
@@ -50,22 +53,25 @@ async fn test_mock_verification_result_generation() {
 #[tokio::test]
 async fn test_verification_state_transitions() {
     let mut session = UserSession::new(12345);
-    
+
     // Test initial state
     assert!(matches!(session.verification_state, VerificationState::NotStarted));
-    
+
     // Test transition to in progress
-    session.update_verification_state(VerificationState::InProgress { 
-        verification_id: "test_id".to_string() 
+    session.update_verification_state(VerificationState::InProgress {
+        verification_id: "test_id".to_string()
     });
     assert!(matches!(session.verification_state, VerificationState::InProgress { .. }));
-    
+
     // Test transition to completed
     let mock_result = VerificationResult {
         verified: true,
         timestamp: "2024-01-01T00:00:00Z".to_string(),
         proof: "test-proof".to_string(),
         badge: "Test Badge".to_string(),
+        verification_type: None,
+        wallet_address: None,
+        sbt_expiry: None,
     };
     session.update_verification_state(VerificationState::Completed { verification_result: mock_result });
     assert!(matches!(session.verification_state, VerificationState::Completed { .. }));
