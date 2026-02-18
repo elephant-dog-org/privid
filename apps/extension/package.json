@@ -31,7 +31,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build --config vite.popup.config.ts --logLevel silent && vite build --config vite.content.config.ts --logLevel silent && vite build --config vite.gmail.config.ts --logLevel silent && vite build --config vite.twitter.config.ts --logLevel silent",
+    "build": "vite build --config vite.popup.config.ts --logLevel silent && vite build --config vite.content.config.ts --logLevel silent && vite build --config vite.gmail.config.ts --logLevel silent && vite build --config vite.twitter.config.ts --logLevel silent && vite build --config vite.background.config.ts --logLevel silent",
     "preview": "vite preview",
     "typechain": "typechain --target ethers-v5 --out-dir blockchain/typechain blockchain/abis/*.json",
     "package-extension": "sh scripts/package-extension.sh",

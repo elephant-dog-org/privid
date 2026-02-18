@@ -31,6 +31,8 @@ cp content/gmail/injectGmailBadge.css dist/content/gmail/injectGmailBadge.css
 mkdir -p dist/content/twitter
 cp content/twitter/injectTwitterBadge.css dist/content/twitter/injectTwitterBadge.css
 
+# Background service worker is built to dist/background/ by vite
+
 # Copy necessary files to build/
 cp manifest.json build/
 cp -r popup build/

@@ -1,3 +1,4 @@
+mod api;
 mod blockchain;
 mod config;
 mod db;
@@ -838,6 +839,14 @@ async fn main() {
             ))
         }
     };
+
+    // Start HTTP API server alongside Telegram bot
+    let api_registry = shared_registry.clone();
+    let api_port = config.api_port;
+    tokio::spawn(async move {
+        crate::api::start_api_server(api_registry, api_port).await;
+    });
+    info!("API server started on port {}", config.api_port);
 
     // Badge tracker (resets on restart)
     let badge_tracker: BadgeTracker = Arc::new(RwLock::new(HashSet::new()));

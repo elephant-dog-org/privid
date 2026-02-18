@@ -1275,27 +1275,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         const hasLinkedTwitter = !!linkedPlatforms?.twitter;
         const registrySize = Object.keys(data.twitterRegistry || {}).length;
 
-        // Only show if wallet connected but not fully set up
-        if (!walletConnected) {
-            onboardingSection.style.display = 'none';
-            return;
-        }
-
         // If fully verified and registered, hide onboarding
-        if (hasVerification && hasLinkedTwitter) {
+        if (walletConnected && hasVerification && hasLinkedTwitter) {
             onboardingSection.style.display = 'none';
             return;
         }
 
+        // Always show onboarding if setup is incomplete
         onboardingSection.style.display = 'block';
 
         // Update checkmarks
         setOnboardingCheck('check-wallet', walletConnected);
         setOnboardingCheck('check-passport', hasVerification);
-        // ENS and text records: cannot easily check client-side without RPC calls
-        // Leave as unchecked by default (user verifies manually)
-        setOnboardingCheck('check-ens', false);
-        setOnboardingCheck('check-records', false);
+
+        // Check ENS ownership via the existing resolveENSEmail utility
+        let hasEns = false;
+        if (walletConnected && data.walletAuth && typeof data.walletAuth === 'object' && 'address' in data.walletAuth) {
+            try {
+                await loadEmailLookupUtils();
+                const ensResult = await resolveENSEmail(data.walletAuth.address as string);
+                hasEns = !!(ensResult && ensResult.ensName);
+                // If ENS has email set, that's at least one text record
+                setOnboardingCheck('check-records', !!(ensResult && ensResult.email));
+            } catch {
+                // ENS lookup failed — leave unchecked
+                setOnboardingCheck('check-records', false);
+            }
+        } else {
+            setOnboardingCheck('check-records', false);
+        }
+        setOnboardingCheck('check-ens', hasEns);
+
         setOnboardingCheck(
             'check-register',
             hasLinkedTwitter || registrySize > 0
@@ -1312,4 +1322,36 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Call on popup load
     updateOnboardingChecklist();
+
+    // ── API URL Settings ──
+    const saveApiUrlBtn = document.getElementById(
+        'saveApiUrlBtn'
+    ) as HTMLButtonElement | null;
+    if (saveApiUrlBtn) {
+        const apiUrlInput = document.getElementById(
+            'apiUrlInput'
+        ) as HTMLInputElement;
+
+        // Load saved URL
+        browser.storage.local
+            .get(['prividApiUrl'])
+            .then((data: { prividApiUrl?: string }) => {
+                if (data.prividApiUrl) {
+                    apiUrlInput.value = data.prividApiUrl;
+                }
+            });
+
+        saveApiUrlBtn.addEventListener('click', async () => {
+            const url = apiUrlInput.value.trim();
+            if (url) {
+                await browser.storage.local.set({ prividApiUrl: url });
+            } else {
+                await browser.storage.local.remove('prividApiUrl');
+            }
+            saveApiUrlBtn.textContent = 'Saved!';
+            setTimeout(() => {
+                saveApiUrlBtn.textContent = 'Save';
+            }, 1500);
+        });
+    }
 });

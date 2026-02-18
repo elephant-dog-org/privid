@@ -34,6 +34,8 @@ pub struct Config {
     pub ethereum_rpc_url: String,
     /// Logging level filter
     pub rust_log: String,
+    /// Port for the HTTP API server
+    pub api_port: u16,
 }
 
 impl Config {
@@ -71,6 +73,11 @@ impl Config {
 
         let rust_log = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
+        let api_port = env::var("API_PORT")
+            .unwrap_or_else(|_| "3141".to_string())
+            .parse::<u16>()
+            .unwrap_or(3141);
+
         Self {
             telegram_bot_token,
             verification_mode,
@@ -78,6 +85,7 @@ impl Config {
             hub_contract_address,
             ethereum_rpc_url,
             rust_log,
+            api_port,
         }
     }
 }

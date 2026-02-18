@@ -78,8 +78,9 @@ if (hostname !== 'twitter.com' && hostname !== 'x.com') {
     // ---------------------------------------------------------------------------
 
     /**
-     * Look up a Twitter handle in the extension's local registry.
-     * Checks the in-memory cache first, then falls back to chrome.storage.
+     * Look up a Twitter handle via the background service worker.
+     * Checks the in-memory cache first, then delegates to the service
+     * worker which handles chrome.storage cache and bot API fallback.
      */
     async function lookupHandle(
         handle: string
@@ -95,22 +96,30 @@ if (hostname !== 'twitter.com' && hostname !== 'x.com') {
         pendingLookups.add(normalizedHandle);
 
         try {
+            // Ask the background service worker to look up this handle
             const result = await new Promise<TwitterCacheEntry | null>(
                 (resolve) => {
-                    if (typeof chrome !== 'undefined' && chrome.storage) {
-                        chrome.storage.local.get(
-                            ['twitterRegistry'],
-                            (data) => {
-                                const registry = data.twitterRegistry || {};
-                                const entry = registry[normalizedHandle];
-
-                                if (entry) {
+                    if (
+                        typeof chrome !== 'undefined' &&
+                        chrome.runtime?.sendMessage
+                    ) {
+                        chrome.runtime.sendMessage(
+                            {
+                                action: 'lookupTwitterHandle',
+                                handle: normalizedHandle
+                            },
+                            (response) => {
+                                if (chrome.runtime.lastError) {
+                                    resolve(null);
+                                    return;
+                                }
+                                if (response && response.verified) {
                                     const cacheEntry: TwitterCacheEntry = {
                                         verified: true,
-                                        sbtTypes: entry.sbtTypes || [],
-                                        ensName: entry.ensName || '',
+                                        sbtTypes: response.sbtTypes || [],
+                                        ensName: response.ensName || '',
                                         walletAddress:
-                                            entry.walletAddress || '',
+                                            response.walletAddress || '',
                                         timestamp: Date.now()
                                     };
                                     twitterCache.set(
@@ -119,7 +128,6 @@ if (hostname !== 'twitter.com' && hostname !== 'x.com') {
                                     );
                                     resolve(cacheEntry);
                                 } else {
-                                    // Cache negative result too
                                     const negEntry: TwitterCacheEntry = {
                                         verified: false,
                                         sbtTypes: [],
@@ -142,7 +150,6 @@ if (hostname !== 'twitter.com' && hostname !== 'x.com') {
             );
             return result;
         } catch {
-            // Storage lookup failed -- skip silently
             return null;
         } finally {
             pendingLookups.delete(normalizedHandle);

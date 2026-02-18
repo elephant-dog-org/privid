@@ -139,13 +139,7 @@ impl Database {
                      UNIQUE(telegram_user_id, platform)
                  );
 
-                 CREATE INDEX IF NOT EXISTS idx_platform_handle ON platform_links(platform, handle);
-
-                 CREATE TABLE IF NOT EXISTS sessions (
-                     user_id INTEGER PRIMARY KEY,
-                     session_data TEXT NOT NULL,
-                     updated_at TEXT NOT NULL
-                 );",
+                 CREATE INDEX IF NOT EXISTS idx_platform_handle ON platform_links(platform, handle);",
             )?;
             Ok(())
         })
@@ -402,6 +396,10 @@ impl Database {
 
     /// Migrate existing registry data from a JSON file into SQLite.
     ///
+    /// Handles both array format (`[{...}, {...}]`) and map format
+    /// (`{"123": {...}, "456": {...}}`), since the old registry serialization
+    /// may have used either depending on the version.
+    ///
     /// Reads the JSON file, inserts all entries, and renames the file to .migrated.
     /// Returns the number of entries migrated.
     pub async fn migrate_from_json(&self, registry_path: &str) -> Result<usize> {
@@ -411,7 +409,22 @@ impl Database {
         }
 
         let content = tokio::fs::read_to_string(&path).await?;
-        let entries: Vec<RegistrationEntry> = serde_json::from_str(&content)?;
+
+        // Try array format first, then map format
+        let entries: Vec<RegistrationEntry> =
+            if let Ok(vec) = serde_json::from_str::<Vec<RegistrationEntry>>(&content) {
+                vec
+            } else if let Ok(map) =
+                serde_json::from_str::<std::collections::HashMap<String, RegistrationEntry>>(
+                    &content,
+                )
+            {
+                map.into_values().collect()
+            } else {
+                anyhow::bail!(
+                    "registry.json is not a recognized format (expected array or map of entries)"
+                );
+            };
         let count = entries.len();
 
         for entry in &entries {
@@ -631,5 +644,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_migrate_from_json_map_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let json_path = dir.path().join("registry.json");
+
+        // Write test JSON as a HashMap (keyed by user_id string)
+        let mut map = std::collections::HashMap::new();
+        map.insert("1".to_string(), make_entry(1, "alice", "alice.eth"));
+        map.insert("2".to_string(), make_entry(2, "bob", "bob.eth"));
+        let json = serde_json::to_string_pretty(&map).unwrap();
+        tokio::fs::write(&json_path, &json).await.unwrap();
+
+        let db = Database::new_in_memory().await.unwrap();
+        let count = db
+            .migrate_from_json(json_path.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(db.count().await.unwrap(), 2);
     }
 }

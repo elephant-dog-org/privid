@@ -9,6 +9,9 @@
   "action": {
     "default_popup": "popup/popup.html"
   },
+  "background": {
+    "service_worker": "dist/background/service-worker.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://bsky.app/profile/*"],

@@ -163,6 +163,20 @@
                     </div>
                 </div>
             </div>
+            <!-- API Settings -->
+            <div id="apiSettings" style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #eee;">
+                <details>
+                    <summary style="font-size: 0.8em; color: #999; cursor: pointer;">API Settings</summary>
+                    <div style="margin-top: 8px;">
+                        <label style="font-size: 0.75em; color: #666;">Bot API URL</label>
+                        <div style="display: flex; gap: 4px; margin-top: 4px;">
+                            <input type="text" id="apiUrlInput" placeholder="http://localhost:3141" style="flex: 1; font-size: 0.8em; padding: 4px 8px;">
+                            <button id="saveApiUrlBtn" class="btn-small">Save</button>
+                        </div>
+                        <p style="font-size: 0.7em; color: #999; margin-top: 4px;">URL of your PrivID bot's API server</p>
+                    </div>
+                </details>
+            </div>
         </div>
         <!-- Login Modal -->
         <div id="loginModal" class="modal" style="display: none">
