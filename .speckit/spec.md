@@ -1,18 +1,18 @@
-# Feature Specification: PrivID v2 — Twitter Badges, Trust Network, Cross-Platform Registry
+# Feature Specification: PrivID v3 — Zero-Registration Passive Verification (BYOK)
 
 **Status**: Draft
 **Created**: 2026-02-17
-**Feature**: Cross-platform proof-of-personhood with individual trust signals
+**Feature**: Client-side passive identity verification with bring-your-own-key model
 
 ---
 
 ## Problem Statement
 
-PrivID currently verifies Human Passport holders in Telegram group chats and Gmail inboxes. But the majority of crypto/web3 discourse happens on Twitter/X, where verification trust has eroded since the paid blue check era. Users have no way to know if a Twitter account belongs to a verified human with real credentials.
+PrivID v2 requires every user to register with the system before they can be identified as verified. This creates unacceptable friction: the people who would benefit most from being badged (verified humans on Twitter/X) are exactly the people who won't go through a multi-step registration flow.
 
-Additionally, knowing someone is verified is useful — but knowing that *people you trust* also trust that person is far more compelling. Individual trust signals ("4 verified people you follow also follow this person") provide social proof that a standalone badge cannot.
+Meanwhile, the data needed to verify someone already exists publicly: wallet addresses linked to social handles (via Next.ID, Farcaster), identity attestations on-chain (Holonym SBTs), and ENS records. The system should read this public data directly rather than building its own registration silo.
 
-The current system also uses flat JSON files for persistence, which won't scale, and requires users to already have all prerequisites (wallet, ENS, Human Passport) with no guidance for those who don't.
+Additionally, running a centralized API server to serve verification lookups creates operational costs and a single point of failure. The extension should function entirely client-side, querying public APIs directly from the user's browser.
 
 ---
 
@@ -20,121 +20,122 @@ The current system also uses flat JSON files for persistence, which won't scale,
 
 | Actor | Description |
 |-------|-------------|
-| **Verified User** | Has a Human Passport (SBTs on Optimism), ENS name, and registered with PrivID |
-| **Unverified User** | Doesn't yet have credentials; needs guidance through onboarding |
-| **Viewer** | Anyone browsing Twitter/Gmail/Telegram who sees badges and trust signals |
-| **Group Admin** | Telegram group admin who adds the bot |
+| **Extension User** | Installs the PrivID browser extension; browses Twitter/X and sees verification badges on verified humans. May optionally configure API keys for enhanced coverage. |
+| **Verified Human** | Holds Holonym SBT credentials and has linked their social identity via Next.ID, Farcaster, or ENS text records. Does NOT need to register with PrivID — discovered automatically. |
+| **Bot Operator** | Runs the PrivID Telegram bot on their own machine. The bot serves group chat verification independently from the extension. |
+| **Group Member** | Participates in Telegram groups where the PrivID bot operates. |
 
 ---
 
 ## Functional Requirements
 
-### FR-1: Twitter/X Badge Injection
+### FR-1: Passive Twitter/X Identity Resolution
 
-- The browser extension injects verification badges next to display names on twitter.com / x.com
-- Badges appear on tweet authors, profile pages, reply authors, and quoted tweets
-- Badge lookup flow: extract @handle from DOM → check local registry → check ENS `com.twitter` text records → resolve wallet → verify Human Passport SBTs
-- Results are cached locally with a reasonable TTL to avoid repeated lookups
-- Badge includes a tooltip showing verification details (SBT types, ENS name)
-- Works alongside existing Gmail and Bluesky badge injection
+- The extension automatically identifies verified humans on Twitter/X without requiring them to register with PrivID
+- Resolution pipeline: extract @handle from DOM → query identity providers for linked wallet → check wallet for Holonym SBTs → show badge
+- A free baseline MUST work with zero configuration using providers that require no API keys
+- Enhanced coverage MUST be available when the user provides their own API keys for additional providers
+- Results are cached locally with time-based expiry to minimize repeated queries
+- Failed or unavailable providers are skipped silently — the system tries all available sources and shows a badge if any source confirms verification
 
-### FR-2: Cross-Platform Identity Registry
+### FR-2: Multi-Provider Identity Resolution
 
-- A unified registry stores the mapping: platform identity → ENS name → wallet → verified SBT types
-- Supports multiple platform identities per user (Twitter handle, Telegram username, email)
-- Registration happens once via any entry point (extension popup, Telegram DM) and propagates to all platforms
-- Extension popup provides a "Link Twitter" flow where users enter their @handle
-- The bot provides `/register` which also captures Twitter if the ENS has a `com.twitter` text record
-- Registry is stored in SQLite (replacing current JSON file persistence)
+- The system queries multiple identity providers in a waterfall pattern (free sources first, then paid if keys are configured):
+  - **Free, no key required**: Next.ID ProofService (twitter handle → wallet), Holonym API (wallet → SBT check), ensdata.net (wallet → ENS records)
+  - **Optional, user provides key**: Neynar/Farcaster API (twitter handle → wallet via Farcaster verification), The Graph ENS subgraph (ENS text record reverse lookup), Gitcoin Passport (wallet → humanity score)
+- Each provider is a self-contained module that can fail independently without affecting others
+- Provider results are merged: if multiple sources return different wallets, each wallet is checked for SBTs
+- The system MUST be extensible — adding a new identity provider should not require changing the core resolution logic
 
-### FR-3: Individual Trust Network
+### FR-3: BYOK API Key Management
 
-- When viewing a Twitter profile or checking `/whois` in Telegram, show how many verified people the *viewer* follows/knows who also follow the target person
-- Display format: "Trusted by 4 verified people you follow" or similar
-- Trust data is gathered per-viewer: the extension reads the viewer's Twitter following list, cross-references with the PrivID registry
-- Trust scores are computed locally in the extension (no server-side social graph needed for v1)
-- In Telegram, `/whois` shows "N verified members of this group also verified" based on registry data
+- The extension popup provides a settings panel where users can enter their own API keys for paid providers
+- Keys are stored in the user's local browser storage only
+- Keys are sent only to the respective API endpoint they authenticate against
+- Each provider has a "Test" function to verify the key works before relying on it
+- The settings panel clearly indicates which providers are free and which require a key
+- Users who provide no keys still get the free baseline functionality
 
-### FR-4: Onboarding Funnel
+### FR-4: Rich Verification Badge
 
-- When an unverified user encounters PrivID (via `/whois` nudge, extension popup, or Twitter badge click), they see a step-by-step guide:
-  1. Get a wallet (link to popular options)
-  2. Get your Human Passport at app.passport.xyz
-  3. Get an ENS name at app.ens.domains
-  4. Set text records (org.telegram, com.twitter) on your ENS
-  5. Register with PrivID
-- Each step shows whether the user has completed it (progressive checklist)
-- The extension popup shows onboarding progress for connected wallets
-- The Telegram bot guides users step-by-step when they DM `/register` without prerequisites
+- Badges on Twitter/X show richer information than v2:
+  - Verification source ("Verified via Holonym")
+  - Credential types held (KYC, Phone, ePassport, Biometrics)
+  - ENS name if available
+  - Gitcoin Passport score if available and user has configured the key
+  - Which identity sources confirmed the link ("Confirmed by: Next.ID, Farcaster")
+- Trust network signals from v2 continue to work ("Trusted by N verified people you know")
 
-### FR-5: SQLite Migration
+### FR-5: Telegram Bot Enhancement
 
-- Replace `data/registry.json` and `data/sessions.json` with a single SQLite database
-- Maintain all existing functionality (register, deregister, lookup by user ID, lookup by username)
-- Add indexes for wallet address and ENS name lookups
-- Add a `platform_links` table for cross-platform identity mapping
-- Support concurrent read/write access safely
-- Migrate existing JSON data on first run if files exist
+- The bot's `/whois` command gains a passive lookup fallback: if a user is not in the local registry, query Next.ID by Telegram username as a secondary source
+- Existing registration flow (`/register name.eth`) continues to work for users who want explicit registration
+- The bot remains a self-contained, self-hosted tool with no dependency on the extension or any PrivID-operated service
 
 ---
 
 ## User Scenarios & Testing
 
-### Scenario 1: Twitter Badge — Verified User
+### Scenario 1: Zero-Config Badge Discovery
 
-**Given** a verified user (@alice) has registered with PrivID and has Human Passport SBTs
-**When** another user browses twitter.com and sees @alice's tweet
-**Then** a verification badge appears next to @alice's display name
-**And** hovering shows "Verified — Human Passport | KYC, Phone | ENS: alice.eth"
+**Given** a user installs the PrivID extension with no configuration
+**And** browses to a Twitter profile of someone who has a Holonym SBT and a Next.ID proof linking their Twitter handle to their wallet
+**When** the page loads
+**Then** a verification badge appears next to that person's display name
+**And** no API keys, registration, or setup was required
 
-### Scenario 2: Twitter Badge — Trust Signal
+### Scenario 2: Enhanced Coverage with BYOK
 
-**Given** viewer follows 10 verified PrivID users on Twitter
-**And** 4 of those verified users also follow @alice
-**When** viewer sees @alice's profile
-**Then** badge tooltip includes "Trusted by 4 verified people you follow"
+**Given** a user has configured their Neynar API key in the extension settings
+**And** browses to a Twitter profile of someone who verified their X handle on Farcaster but does NOT have a Next.ID proof
+**When** the page loads
+**Then** the Neynar provider resolves the handle via Farcaster
+**And** a verification badge appears (that would NOT have appeared without the key)
 
-### Scenario 3: New User Onboarding via Extension
+### Scenario 3: Badge Tooltip Details
 
-**Given** a user installs the PrivID extension and connects their wallet
-**And** they have no Human Passport and no ENS
-**When** they open the extension popup
-**Then** they see an onboarding checklist showing steps to complete
-**And** each step links to the relevant service (app.passport.xyz, app.ens.domains)
+**Given** a verified user's badge is visible on Twitter
+**When** the viewer hovers over the badge
+**Then** they see: verification source, credential types, ENS name (if any), confirmation sources
+**And** optionally: Passport score (if viewer configured that key), trust network count
 
-### Scenario 4: New User Onboarding via Telegram
+### Scenario 4: Provider Graceful Failure
 
-**Given** a user DMs the bot with `/register`
-**And** they provide an ENS name that has no `org.telegram` text record
-**When** the bot checks their ENS
-**Then** the bot responds with specific instructions for setting the text record
-**And** includes a direct link to app.ens.domains
+**Given** Next.ID is temporarily unavailable
+**And** the user has a Neynar API key configured
+**When** the extension tries to resolve a Twitter handle
+**Then** the Next.ID lookup fails silently
+**And** the Neynar lookup succeeds and returns the badge
+**And** no errors are visible to the user
 
-### Scenario 5: Cross-Platform Registration
+### Scenario 5: API Key Configuration
 
-**Given** a user registers via Telegram with `/register alice.eth`
-**And** alice.eth has `com.twitter` set to `@alice_web3`
-**When** registration completes
-**Then** the registry stores both the Telegram and Twitter identity links
-**And** @alice_web3 shows a badge on twitter.com for extension users
+**Given** a user opens the extension popup and navigates to provider settings
+**When** they enter their Neynar API key and click "Test"
+**Then** the extension makes a test query to Neynar
+**And** shows "Connected" with a success indicator
+**And** the key is saved to local browser storage
 
-### Scenario 6: Telegram Trust Signal
+### Scenario 6: Telegram Passive Whois
 
-**Given** a group has 3 registered PrivID members
-**When** someone uses `/whois @newuser` for a registered user
-**Then** the response includes "Also verified: @member1, @member2 in this group"
+**Given** a user in a Telegram group is NOT registered with the PrivID bot
+**But** they have a Next.ID proof linking their Telegram username to a wallet with Holonym SBTs
+**When** someone uses `/whois @thatuser`
+**Then** the bot queries Next.ID as a fallback
+**And** shows verification details even though the user never registered
 
 ---
 
 ## Success Criteria
 
-- Verification badges appear on twitter.com within 2 seconds of page load for cached users
-- First-time lookups complete within 5 seconds (ENS resolution + SBT query)
-- Users can complete registration from zero (no wallet) to fully verified badge in one session following the onboarding guide
-- Trust signals display for at least 80% of verified profiles viewed (cache hit rate)
-- Cross-platform registration works: register on Telegram, badge appears on Twitter
-- SQLite migration preserves all existing registrations with zero data loss
-- Extension size remains under 500KB (excluding ethers.js chunks)
+- Verified humans on Twitter/X are automatically badged within 3 seconds of page load with zero registration required
+- The free baseline (no API keys configured) successfully resolves and badges at least some verified users via Next.ID + Holonym
+- Users who configure additional API keys see broader coverage (more profiles badged)
+- Badge tooltips display verification source, credential types, and at least one identity confirmation source
+- All provider failures are handled silently — no user-visible errors, no broken page layouts
+- Extension functions entirely client-side with no dependency on any PrivID-operated server
+- API keys entered by users are never sent anywhere except to the specific API they authenticate against
+- Telegram bot's `/whois` resolves unregistered users via passive lookup when possible
 
 ---
 
@@ -142,42 +143,45 @@ The current system also uses flat JSON files for persistence, which won't scale,
 
 ### In Scope
 
-- Twitter/X content script with badge injection
-- SQLite database for Telegram bot
-- Individual trust signals (per-viewer, based on their follow list)
-- Onboarding guide in extension popup and Telegram bot
-- Cross-platform identity linking via ENS text records
-- Caching layer for Twitter handle → verification lookups
+- Multi-provider identity resolver (Next.ID, Neynar, Holonym, ensdata.net, Gitcoin Passport, ENS subgraph)
+- BYOK API key management in extension popup
+- Service worker rewrite: query public APIs directly instead of bot API
+- Rich badge tooltips with source attribution
+- Telegram bot `/whois` passive lookup fallback via Next.ID
+- Caching layer for all provider responses
 
 ### Out of Scope
 
-- Full social graph analysis or visualization
-- Server-side infrastructure (everything runs client-side or in the bot)
-- Farcaster/Lens integration (future phase)
-- Twitter API paid tier integration (use ENS records + local registry for v1)
-- Mobile app
-- Automated ENS text record setting (users do this manually)
+- Gmail passive verification (no protocol maps emails to wallets — stays registration-based)
+- Running PrivID's own indexer or backend service
+- Embedding or distributing shared API keys
+- Mobile app or non-Chrome browser support
+- Social graph analysis beyond the existing trust network
+- Removing the existing Telegram registration flow (it stays as an optional path)
 
 ---
 
 ## Assumptions
 
-- ENS `com.twitter` text records are the standard way to link Twitter handles (widely adopted in crypto community)
-- Twitter's DOM structure for tweet authors and profile names is stable enough for content script injection (may need periodic maintenance)
-- The Human Passport Hub contract on Optimism remains at the same address with the same ABI
-- Users are willing to set ENS text records as the trust anchor (vs wallet signature alternatives)
-- The extension can read the viewer's Twitter following list from the DOM without needing Twitter API access
-- SQLite via `rusqlite` crate is sufficient for the Telegram bot's concurrency needs
+- Next.ID ProofService remains free and publicly accessible without rate limiting for moderate usage
+- Holonym's sybil-resistance API remains free and publicly accessible
+- ensdata.net remains free and publicly accessible
+- Neynar's free tier provides sufficient queries for initial testing; users bear costs beyond that
+- The Graph's ENS subgraph free tier (100K queries/month) is sufficient for moderate personal use
+- Twitter/X DOM structure for display names and profiles remains stable enough for badge injection
+- Next.ID has meaningful coverage of crypto-native Twitter users (the primary target audience)
 
 ---
 
 ## Dependencies
 
-- Human Passport (app.passport.xyz) — SBT verification source
-- ENS (Ethereum Name Service) — identity linking via text records
-- Optimism RPC — SBT queries
-- Ethereum mainnet RPC — ENS resolution
-- Chrome Extension APIs — storage, content scripts
+- Next.ID ProofService API — primary free identity resolution
+- Holonym API — SBT verification (free)
+- ensdata.net — ENS enrichment (free)
+- Neynar API — Farcaster-based identity resolution (user's key)
+- The Graph ENS Subgraph — reverse text record lookups (user's key)
+- Gitcoin Passport Scorer API — humanity score enrichment (user's key)
+- Chrome Extension APIs — storage, service worker, content scripts
 - Twitter/X DOM structure — badge injection targets
 
 ---
@@ -186,7 +190,22 @@ The current system also uses flat JSON files for persistence, which won't scale,
 
 | Entity | Attributes |
 |--------|------------|
-| **Identity** | wallet_address, ens_name, verified_sbt_types[], registered_at, last_verified |
-| **PlatformLink** | identity_id, platform (twitter/telegram/email), platform_handle, verified_via_ens |
+| **IdentityResult** | wallet, verified, sources[], ensName, sbtTypes[], passportScore, farcasterFid |
+| **ProviderConfig** | provider_name, requires_key, api_key (user-provided), enabled, last_tested |
+| **CachedLookup** | twitter_handle, result (IdentityResult or null), cached_at, ttl |
 | **TrustCache** | viewer_id, target_handle, mutual_verified_count, cached_at |
-| **OnboardingState** | wallet_connected, has_human_passport, has_ens, has_text_records[], registered |
+
+---
+
+## Edge Cases
+
+- **Multiple wallets**: If Next.ID and Neynar return different wallets for the same handle, check all wallets for SBTs. Badge if any wallet is verified.
+- **Same wallet from multiple providers**: Deduplicate wallets before SBT checking. The `sources` array on the result should list all providers that confirmed the link, even if they returned the same wallet.
+- **Wallet found but no SBTs**: A handle resolves to a wallet via Next.ID or Farcaster, but the wallet holds no Holonym SBTs. No badge is shown. Cache the negative result with 30-minute TTL. This is expected to be the most common outcome.
+- **Stale Next.ID proofs**: A user may have revoked their Next.ID proof but the cache hasn't expired. Use reasonable TTLs (5 minutes positive, 30 minutes negative).
+- **Rate limiting**: If a provider rate-limits requests, back off gracefully and rely on cached data. Never retry in a tight loop.
+- **Handle case sensitivity**: Normalize all Twitter handles to lowercase before lookup.
+- **No providers return data**: For the majority of Twitter handles, no identity link will exist. This is expected — show nothing, cache the negative result, move on.
+- **User adds API key**: Clear all cached entries so newly-configured providers can resolve handles that were previously negative-cached from free-only lookups.
+- **User removes API key**: Clear cached entries. New lookups no longer query that provider.
+- **Holonym API outage**: If the HTTP API is unreachable, fall back to direct on-chain SBT verification via the existing blockchain utilities. This is the only verification source — its failure means zero badges, so a fallback is critical.

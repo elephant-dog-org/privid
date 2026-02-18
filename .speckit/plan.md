@@ -1,4 +1,4 @@
-# Implementation Plan: PrivID v2
+# Implementation Plan: PrivID v3 — Passive Verification (BYOK)
 
 **Spec**: .speckit/spec.md
 **Created**: 2026-02-17
@@ -9,214 +9,201 @@
 
 ```
 Browser Extension (TypeScript)
-├── content/twitter/     ← NEW: Twitter badge injection
-├── content/gmail/       ← Existing: Gmail badge injection
-├── content/             ← Existing: Bluesky badge injection
-├── popup/               ← Modified: onboarding funnel + link Twitter
-└── blockchain/          ← Modified: shared lookup utils
+├── background/
+│   ├── service-worker.ts          ← REWRITE: identity resolver engine
+│   ├── identityResolver.ts        ← NEW: waterfall orchestrator
+│   └── providers/                 ← NEW: one module per API
+│       ├── nextid.ts              ← Free: twitter handle → wallet
+│       ├── neynar.ts              ← BYOK: twitter handle → wallet (Farcaster)
+│       ├── holonym.ts             ← Free: wallet → SBT check
+│       ├── ensdata.ts             ← Free: wallet → ENS name + records
+│       ├── passport.ts            ← BYOK: wallet → humanity score
+│       └── ensSubgraph.ts         ← BYOK: reverse text record lookup
+├── content/twitter/               ← MODIFIED: richer tooltips
+├── content/gmail/                 ← Unchanged
+├── popup/                         ← MODIFIED: provider settings UI
+└── blockchain/                    ← Unchanged
 
 Telegram Bot (Rust)
-├── src/db/              ← NEW: SQLite (replaces storage.rs + registry.rs JSON)
-├── src/ens/             ← Existing: ENS resolution
-├── src/registry.rs      ← Modified: backed by SQLite
-└── src/main.rs          ← Modified: cross-platform registration + trust signals
+├── src/main.rs                    ← MODIFIED: /whois passive fallback
+└── (rest unchanged)
 ```
 
 ---
 
-## Phase 1: SQLite Migration (Telegram Bot)
+## Phase 1: Provider Modules (Free Baseline)
 
-**Goal**: Replace JSON file storage with SQLite. Foundation for everything else.
+**Goal**: Build the three free provider clients that require no API keys.
 
-### Changes
+### New file: `background/providers/nextid.ts`
+- Query: `GET https://proof-service.next.id/v1/proof?platform=twitter&identity={handle}&exact=true`
+- Parse response: extract `ids` array → find proofs with `platform=ethereum` → return wallet addresses
+- Handle: 404 (no proofs found), network errors, malformed responses
+- Return type: `string[]` (array of wallet addresses, possibly empty)
 
-**New file: `src/db.rs`**
-- SQLite connection pool using `rusqlite` with `tokio` wrapper (`tokio-rusqlite`)
-- Schema: `identities` table (wallet, ens_name, sbt_types, registered_at, last_verified)
-- Schema: `platform_links` table (identity_id, platform, handle, verified_via_ens)
-- Schema: `sessions` table (migrated from current state.rs)
-- Migration logic: detect existing JSON files, import, rename to `.migrated`
-- Indexes on wallet_address, ens_name, platform+handle
+### New file: `background/providers/holonym.ts`
+- Check 4 credential endpoints on Optimism:
+  - `GET https://api.holonym.io/sybil-resistance/gov-id/optimism?user={wallet}&action-id=123456789`
+  - Same pattern for: `epassport`, `phone`, `biometrics`
+- Each returns `{ "result": true/false }`
+- Return type: `string[]` (array of verified credential type names, possibly empty)
+- Use a fixed `action-id` value (Holonym uses this for app-scoping; any consistent value works)
 
-**Modified: `src/registry.rs`**
-- Replace `RwLock<HashMap>` with SQLite queries
-- Same public API: register(), deregister(), lookup_by_user_id(), lookup_by_username()
-- Add: lookup_by_twitter_handle(), lookup_by_wallet()
-- Add: link_platform(), get_platform_links()
+### New file: `background/providers/ensdata.ts`
+- Query: `GET https://ensdata.net/{wallet_address}`
+- Parse response: extract `ens` (primary ENS name) and `records` object
+- Return type: `{ ensName: string; records: Record<string, string> } | null`
+- 72-hour cache on their end, but we cache locally too
 
-**Modified: `Cargo.toml`**
-- Add `rusqlite` with `bundled` feature (compiles SQLite from source, no system dep)
-- Add `tokio-rusqlite` for async wrapper
-
-**Modified: `src/main.rs`**
-- Pass `Database` instead of separate `BotState` + `Registry`
-- Existing commands work unchanged
-
-### New Dependencies
-- `rusqlite = { version = "0.33", features = ["bundled"] }`
-- `tokio-rusqlite = "0.6"`
+### Tests
+- Unit tests for response parsing (mock fetch responses)
+- Integration note: real API calls can be tested manually since these are free
 
 ---
 
-## Phase 2: Twitter Content Script (Extension)
+## Phase 2: Provider Modules (BYOK Enhanced)
 
-**Goal**: Inject verification badges on twitter.com / x.com.
+**Goal**: Build provider clients for APIs that need user-supplied keys.
 
-### Changes
+### New file: `background/providers/neynar.ts`
+- Query: `GET https://api.neynar.com/v2/farcaster/user/by_x_username/?x_username={handle}`
+- Header: `x-api-key: {user_key}`
+- Parse response: extract `users[0].verified_addresses.eth_addresses[]`
+- Return type: `string[]` (wallet addresses)
+- Key validation: test query with a known handle (e.g., `vitalik`)
 
-**New file: `content/twitter/injectTwitterBadge.ts`**
-- MutationObserver pattern (same as Gmail content script)
-- Target selectors: tweet author names, profile display names, reply authors
-- Extract @handle from user link hrefs or `data-testid` attributes
-- Lookup chain: local cache → extension storage registry → ENS `com.twitter` reverse lookup
-- Badge injection: `<span class="privid-twitter-badge">` with SVG + tooltip
-- Debounced scanning (300ms, same as Gmail pattern)
-- Cache results in extension storage with 1-hour TTL
+### New file: `background/providers/passport.ts`
+- Query: `GET https://api.scorer.gitcoin.co/registry/v2/score/{scorer_id}/{wallet}`
+- Header: `X-API-KEY: {user_key}`
+- Parse response: extract `score` (string, parse to float) and `passing_score` (boolean)
+- Return type: `{ score: number; passing: boolean } | null`
+- Scorer ID provided by user alongside API key
 
-**New file: `content/twitter/injectTwitterBadge.css`**
-- Badge styling consistent with Gmail badge (blue checkmark, drop shadow)
-- Twitter-specific positioning (inline with display names)
+### New file: `background/providers/ensSubgraph.ts`
+- Query: GraphQL POST to `https://gateway.thegraph.com/api/{user_key}/subgraphs/id/5XqPmWe6gjyrJtFn9cLy237i4cWw2j9HcUJEXsP5qGtH`
+- GraphQL query: find `textChangeds` events where `key=com.twitter` and `value` matches handle
+- **Caveat**: TextChanged records events not current state — results may be stale
+- Parse: extract resolver → domain → name, then forward-resolve to get current wallet
+- Return type: `string[]` (wallet addresses)
+- This is the least reliable provider — treat results as supplementary
 
-**New file: `content/twitter/twitterCache.ts`**
-- Same pattern as `gmail/emailCache.ts`
-- Key: twitter handle → { verified, sbtTypes, ensName, walletAddress, timestamp }
-
-**New file: `vite.twitter.config.ts`**
-- IIFE build config (same pattern as vite.gmail.config.ts)
-- Entry: `content/twitter/injectTwitterBadge.ts`
-- Output: `dist/content/twitter/`
-
-**Modified: `manifest.json`**
-- Add content script entry for `https://twitter.com/*` and `https://x.com/*`
-
-**Modified: `package.json`**
-- Add twitter build to the `build` script chain
-
-**Modified: `scripts/package-extension.sh`**
-- Copy Twitter CSS to dist/content/twitter/
-
-### Twitter Handle → Wallet Resolution
-
-The extension uses this lookup chain for a Twitter @handle:
-
-1. **Local registry** (extension storage): Check if handle is already mapped
-2. **ENS reverse lookup**: This is the hard part. We can't easily go from @handle → ENS name since ENS doesn't index by text record values. Two approaches:
-   - **Registry-first (v1)**: Only badge users who registered via PrivID (we know their handle). Fast, no extra RPC calls, but requires user action.
-   - **ENS indexer (v2, future)**: Use an ENS indexing service to find names with matching `com.twitter` records. Deferred — adds complexity and potential costs.
-
-For v1: badge injection works for registered PrivID users only. The onboarding funnel encourages others to register.
+### Tests
+- Unit tests for response parsing
+- Key validation test functions for each provider
 
 ---
 
-## Phase 3: Cross-Platform Registry (Extension + Bot)
+## Phase 3: Identity Resolver Orchestrator
 
-**Goal**: Register once, verified everywhere.
+**Goal**: Single entry point that waterfalls through providers and returns a unified result.
 
-### Changes
+### New file: `background/identityResolver.ts`
 
-**Modified: `src/main.rs` (Telegram bot)**
-- During `/register name.eth`, also read `com.twitter` and `com.email` ENS text records
-- Store all discovered platform links in `platform_links` table
-- `/status` shows all linked platforms
-
-**New section in `popup/popup.html` + `popup/popup.ts`**
-- "Link Accounts" section in extension popup
-- Shows current linked platforms (Twitter, Telegram, Email)
-- "Link Twitter" button: user enters @handle, stored in extension registry
-- "Link Telegram" button: instructs user to DM the bot
-- Progressive display: green checkmarks for linked platforms
-
-**Shared registry format** (extension storage):
+Core interface:
 ```typescript
-interface RegistryEntry {
-  walletAddress: string;
-  ensName: string;
-  sbtTypes: string[];
-  platforms: {
-    twitter?: string;    // @handle
-    telegram?: string;   // username
-    email?: string;      // hashed
-  };
-  registeredAt: string;
-  lastVerified: string;
+interface IdentityResult {
+    wallet: string;
+    verified: boolean;
+    sources: string[];       // which providers confirmed the link
+    ensName?: string;
+    sbtTypes?: string[];
+    passportScore?: number;
+    farcasterFid?: number;
 }
 ```
 
-**Note**: For v1, the extension and bot maintain separate registries (extension in browser storage, bot in SQLite). They sync indirectly via ENS text records. A shared backend is out of scope.
+Logic:
+1. **Resolve handle → wallets**: Query all enabled handle-to-wallet providers in parallel (Next.ID always, Neynar if key exists, ENS subgraph if key exists)
+2. **Deduplicate wallets**: Normalize to lowercase, remove duplicates
+3. **Verify wallets → SBTs**: For each wallet, query Holonym (always free). Stop at first wallet with SBTs.
+4. **Enrich**: Query ensdata.net (free) for ENS name. Query Gitcoin Passport (if key exists) for score.
+5. **Return**: IdentityResult with all collected data, or null if no verified wallet found.
+
+### API key storage helper
+- `getApiKey(provider: string): Promise<string | null>` — reads from `chrome.storage.local` key `apiKeys.{provider}`
+- `setApiKey(provider: string, key: string): Promise<void>`
+- `testApiKey(provider: string, key: string): Promise<boolean>` — makes a test query
+
+### Modified file: `background/service-worker.ts`
+- Replace `fetchFromApi()` with `resolveTwitterIdentity()` from identityResolver
+- Keep the existing bot API as an optional additional source (if `prividApiUrl` is configured)
+- Cache structure unchanged: `twitterRegistry` in chrome.storage.local
+- Adjust TTLs: 5 minutes positive, 30 minutes negative (since we're querying external APIs)
 
 ---
 
-## Phase 4: Individual Trust Network
+## Phase 4: Popup Settings UI
 
-**Goal**: Show per-viewer trust signals ("N verified people you follow also follow this person").
+**Goal**: Let users configure their API keys and see provider status.
 
-### Twitter Trust Signals
+### Modified: `popup/popup.html`
+- Replace the "API Settings" `<details>` section with a proper "Identity Providers" panel
+- For each provider, show:
+  - Provider name + description
+  - Free/Paid indicator
+  - API key input (for paid providers)
+  - "Test" button → shows "Connected" or "Failed"
+  - Enabled/disabled toggle
+- Providers listed:
+  1. Next.ID (free, always enabled, no config needed)
+  2. Holonym (free, always enabled, no config needed)
+  3. ensdata.net (free, always enabled, no config needed)
+  4. Neynar/Farcaster (needs key, input field)
+  5. Gitcoin Passport (needs key + scorer ID, two input fields)
+  6. The Graph ENS (needs key, input field)
+  7. PrivID Bot API (optional, URL input — legacy fallback)
 
-**Modified: `content/twitter/injectTwitterBadge.ts`**
-- After injecting badge, compute trust score for that profile
-- Read viewer's cached following list from extension storage
-- Cross-reference: how many of viewer's followees are (a) in PrivID registry AND (b) follow the target user
-- Display in tooltip: "Trusted by N verified people you follow"
-
-**New file: `content/twitter/trustNetwork.ts`**
-- `getViewerFollowing()`: Scrape viewer's following list from Twitter DOM (lazy, cached)
-  - Navigate to twitter.com/following programmatically? No — too invasive
-  - Instead: build following list passively as viewer browses (observe tweet authors, profile visits)
-  - Store in extension storage, grows over time
-- `computeTrustScore(targetHandle, viewerFollowing, registry)`: Count mutual verified connections
-- Cache trust scores with TTL
-
-**Key design decision**: We do NOT scrape Twitter's following list aggressively. Instead:
-1. As the viewer browses Twitter, we passively collect handles they interact with
-2. When they visit someone's profile, we check: "of the verified PrivID users we've seen this viewer engage with, how many also engage with this target?"
-3. This is an approximation, not an exact follower count — but it's privacy-respecting and doesn't require API access
-
-### Telegram Trust Signals
-
-**Modified: `src/main.rs`**
-- `/whois` in a group: after showing verification info, also list other verified members in the same group
-- "Also verified in this group: @alice, @bob, @charlie"
-- Uses existing registry data + badge tracker to know who's in the group
+### Modified: `popup/popup.ts`
+- Load/save API keys from chrome.storage.local
+- Test connection handlers for each paid provider
+- Visual feedback: green dot for working providers, gray for unconfigured, red for failed
 
 ---
 
-## Phase 5: Onboarding Funnel
+## Phase 5: Badge Tooltip Enhancement
 
-**Goal**: Guide unverified users through getting credentials.
+**Goal**: Show richer verification details in Twitter badge tooltips.
 
-### Extension Onboarding
+### Modified: `content/twitter/injectTwitterBadge.ts`
+- Update `createBadgeElement()` to accept the full IdentityResult
+- Tooltip now shows:
+  - Line 1: "Verified via Holonym" (always)
+  - Line 2: Credential types — "KYC, Phone" (from sbtTypes)
+  - Line 3: ENS name — "ENS: alice.eth" (if available)
+  - Line 4: Passport score — "Passport: 24.5" (if available)
+  - Line 5: Sources — "Confirmed by: Next.ID, Farcaster" (from sources array)
+  - Line 6: Trust — "Trusted by N verified people you know" (existing trust network)
+- Service worker response format updated to include all IdentityResult fields
 
-**Modified: `popup/popup.html` + `popup/popup.ts`**
-- New "Get Verified" section (shown when wallet connected but not fully registered)
-- Progressive checklist:
-  - [ ] Connect wallet (already done if showing this)
-  - [ ] Human Passport — link to app.passport.xyz + auto-check SBTs
-  - [ ] ENS name — link to app.ens.domains + auto-check reverse resolution
-  - [ ] Text records set — auto-check org.telegram / com.twitter
-  - [ ] Registered with PrivID
-- Each step auto-detects completion by querying on-chain state
-- CTA button advances to next incomplete step
+---
 
-### Telegram Onboarding
+## Phase 6: Telegram Bot Passive Lookup
 
-**Modified: `src/main.rs`**
-- When `/register` fails (no ENS, no text record, no SBTs), provide specific next-step guidance
-- New `/setup` command: shows full onboarding checklist with status
-- Links to app.passport.xyz, app.ens.domains with instructions
+**Goal**: Bot's `/whois` tries Next.ID as fallback for unregistered users.
+
+### Modified: `apps/telegram-bot/src/main.rs`
+- In `/whois` handler: if user not found in local registry, query Next.ID by Telegram username
+  - `GET https://proof-service.next.id/v1/proof?platform=telegram&identity={username}&exact=true`
+- If Next.ID returns a wallet, check Holonym SBTs
+- If verified, show result with note: "Discovered via Next.ID (not registered)"
+- No new Rust dependencies needed — uses existing `reqwest`
 
 ---
 
 ## Implementation Order
 
-| Phase | Effort | Dependencies |
-|-------|--------|--------------|
-| Phase 1: SQLite Migration | Medium | None |
-| Phase 2: Twitter Content Script | Medium | Phase 1 (registry format) |
-| Phase 3: Cross-Platform Registry | Small | Phase 1 + Phase 2 |
-| Phase 4: Trust Network | Medium | Phase 2 + Phase 3 |
-| Phase 5: Onboarding Funnel | Small | Phase 3 (knows what's missing) |
+| Phase | Effort | Dependencies | Parallelizable |
+|-------|--------|--------------|----------------|
+| Phase 1: Free providers | Small | None | Yes (all 3 independent) |
+| Phase 2: BYOK providers | Small | None | Yes (all 3 independent, parallel with Phase 1) |
+| Phase 3: Identity resolver | Medium | Phase 1 + 2 | No (needs providers) |
+| Phase 4: Popup settings UI | Small | Phase 3 (needs key storage) | No |
+| Phase 5: Badge tooltip | Small | Phase 3 (needs IdentityResult) | Parallel with Phase 4 |
+| Phase 6: Telegram fallback | Small | None (independent codebase) | Parallel with any phase |
 
-Phases 1 and 2 can be worked in parallel since they're in different codebases (Rust vs TypeScript).
+Phases 1 + 2 can be built in parallel (6 independent modules).
+Phase 6 is independent and can be built at any time.
+Phases 4 + 5 can be built in parallel once Phase 3 is done.
 
 ---
 
@@ -224,8 +211,17 @@ Phases 1 and 2 can be worked in parallel since they're in different codebases (R
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Twitter DOM changes break badge injection | Badges stop appearing | Use semantic selectors where possible, add version-specific fallbacks |
-| ENS text record adoption is low | Few users to badge | Registry-first approach (users register explicitly), onboarding funnel |
-| Twitter anti-extension measures | Extension blocked | Content script is read-only (no API calls to Twitter), low detection risk |
-| Human Passport contract changes | SBT queries break | Abstract behind provider trait (already done), easy to update |
-| SQLite file locking under load | Bot hangs on writes | WAL mode, connection pooling, async wrapper |
+| Next.ID has low coverage for target audience | Few badges on free baseline | Neynar BYOK provides broader Farcaster coverage; ENS subgraph provides another path |
+| Next.ID rate limits or goes down | Free baseline stops working | Cache aggressively; fall back to BYOK providers; negative cache prevents hammering |
+| Holonym API changes or goes offline | Can't verify SBTs | Already have direct on-chain SBT checking in the extension (existing blockchain/ module) — can fall back to RPC |
+| CORS blocks service worker → API calls | Lookups fail in browser | Service workers are not subject to CORS (they make fetch requests like a server); this is a non-issue |
+| ENS subgraph TextChanged is unreliable | Stale reverse lookups | Document as supplementary source; always verify forward resolution matches |
+| Too many API calls per page load | Slow page, rate limits | Batch lookups, aggressive caching (5min positive, 30min negative), skip if already cached |
+
+---
+
+## No New Dependencies
+
+All HTTP calls use the built-in `fetch` API available in Chrome MV3 service workers.
+No new npm packages required for the extension.
+No new Rust crates required for the Telegram bot.
