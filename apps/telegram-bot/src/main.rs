@@ -9,7 +9,7 @@ mod storage;
 mod verification;
 
 use teloxide::prelude::*;
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters};
 use teloxide::utils::command::BotCommands;
 use log::{debug, info, warn};
 use dotenv::dotenv;
@@ -36,7 +36,13 @@ type BadgeTracker = Arc<RwLock<HashSet<(i64, u64)>>>;
 #[command(rename_rule = "lowercase", description = "Available commands:")]
 enum Command {
     #[command(description = "Start the bot and see welcome message")]
-    Start,
+    Start(String),
+    #[command(description = "Mint a verification challenge link to send someone (DM only)")]
+    Challenge(String),
+    #[command(description = "List the challenges you've sent and their results")]
+    Challenges,
+    #[command(description = "See what others learn when they verify you")]
+    Verifyme,
     #[command(description = "Check wallet verification: /verify 0xABC...")]
     Verify(String),
     #[command(description = "Link your ENS name (DM only): /register name.eth")]
@@ -211,6 +217,146 @@ fn parse_callback_data(data: &str) -> Option<(&str, &str)> {
     Some((action, wallet))
 }
 
+/// How long a minted challenge token stays claimable.
+const CHALLENGE_TTL_MINUTES: i64 = 30;
+/// Prefix that marks a `/start` deep-link payload as a challenge claim.
+const CHALLENGE_PREFIX: &str = "chg_";
+
+/// Mint a fresh single-use challenge token (`chg_<32 hex>`).
+fn mint_challenge_token() -> String {
+    format!("{}{}", CHALLENGE_PREFIX, hex::encode(rand::random::<[u8; 16]>()))
+}
+
+/// Evaluate a claimant against the local registry and return (passed, assurance tier).
+///
+/// MVP scope: reads the existing ENS/Holonym-backed registry (the read-first "rung 2"
+/// of the enrollment ladder). OAuth-social (rung 1) and the Human Passport Stamps
+/// provider land in a later pass.
+fn evaluate_claimant(entry: Option<&RegistrationEntry>) -> (bool, &'static str) {
+    match entry {
+        Some(e) if !e.verified_sbt_types.is_empty() => (true, "KYC'd human (Human Passport)"),
+        Some(_) => (false, "Linked, but no credential"),
+        None => (false, "Unknown — not verified"),
+    }
+}
+
+/// Handle a claimant opening a challenge deep link (`/start chg_<token>`).
+///
+/// Reads the claimant's identity, atomically claims the (single-use) token, DMs the
+/// claimant a neutral confirmation, and delivers the verdict to the challenger.
+async fn handle_claim(
+    bot: &Bot,
+    msg: &Message,
+    token: &str,
+    db: &Database,
+    registry: &Registry,
+    bot_username: &str,
+) -> ResponseResult<()> {
+    let claimant = match msg.from.as_ref() {
+        Some(u) => u,
+        None => return Ok(()),
+    };
+
+    let challenge = match db.get_challenge(token).await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            bot.send_message(msg.chat.id, "This verification link is invalid or has already been used.")
+                .await?;
+            return Ok(());
+        }
+        Err(e) => {
+            warn!("Failed to read challenge {}: {}", token, e);
+            bot.send_message(msg.chat.id, "Something went wrong reading that link. Please ask for a new one.")
+                .await?;
+            return Ok(());
+        }
+    };
+
+    let now = chrono::Utc::now();
+    if !challenge.is_open(now) {
+        let reason = if challenge.status == "claimed" {
+            "This verification link has already been used."
+        } else {
+            "This verification link has expired. Ask the person for a fresh one."
+        };
+        bot.send_message(msg.chat.id, reason).await?;
+        return Ok(());
+    }
+
+    // Evaluate the claimant against the registry (read-first).
+    let entry = registry.lookup_by_user_id(claimant.id.0).await;
+    let (passed, tier) = evaluate_claimant(entry.as_ref());
+
+    // Atomically claim the token (single-use guard inside SQL).
+    let claimed = db
+        .claim_challenge(
+            token,
+            claimant.id.0 as i64,
+            claimant.username.clone(),
+            tier,
+            passed,
+            now,
+        )
+        .await
+        .unwrap_or(false);
+
+    if !claimed {
+        bot.send_message(msg.chat.id, "This verification link has already been used.")
+            .await?;
+        return Ok(());
+    }
+
+    // Neutral confirmation to the claimant — challenger identity is not revealed.
+    bot.send_message(
+        msg.chat.id,
+        "\u{2705} Thanks — your verification result has been sent to the person who asked. \
+         Nothing else about you is shared.",
+    )
+    .await?;
+
+    // Deliver the verdict to the challenger via DM.
+    let claimant_handle = claimant
+        .username
+        .clone()
+        .map(|u| format!("@{}", u))
+        .unwrap_or_else(|| claimant.full_name());
+
+    let label_line = challenge
+        .label
+        .as_ref()
+        .map(|l| format!("\nFor: {}", l))
+        .unwrap_or_default();
+
+    let verdict = if passed {
+        let detail = entry
+            .as_ref()
+            .map(|e| format!("\nENS: {}\nSBTs: {}", e.ens_name, e.sbt_summary()))
+            .unwrap_or_default();
+        format!(
+            "\u{2705} Challenge passed\n\n{} — {}{}{}\nChecked: {} UTC",
+            claimant_handle,
+            tier,
+            detail,
+            label_line,
+            now.format("%Y-%m-%d %H:%M"),
+        )
+    } else {
+        format!(
+            "\u{274c} Challenge result: not verified\n\n\
+             {} opened your challenge but is not verified ({}).{}\n\n\
+             Note: \"not verified\" is common and is NOT proof of a scam — most people \
+             haven't set this up. A pass is the strong signal, not a fail.\n\n\
+             They can set up verification by opening https://t.me/{} and sending /start.",
+            claimant_handle, tier, label_line, bot_username,
+        )
+    };
+
+    bot.send_message(ChatId(challenge.challenger_user_id), verdict)
+        .await?;
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Command handler
 // ---------------------------------------------------------------------------
@@ -224,9 +370,18 @@ async fn handle_command(
     ens_resolver: Arc<EnsResolver>,
     registry: Arc<Registry>,
     badge_tracker: BadgeTracker,
+    db: Arc<Database>,
+    bot_username: Arc<String>,
 ) -> ResponseResult<()> {
     match cmd {
-        Command::Start => {
+        Command::Start(payload) => {
+            // Deep-link claim: /start chg_<token>
+            let payload = payload.trim();
+            if payload.starts_with(CHALLENGE_PREFIX) {
+                handle_claim(&bot, &msg, payload, &db, &registry, &bot_username).await?;
+                return Ok(());
+            }
+
             let user_id = msg.from.as_ref().map(|u| u.id.0).unwrap_or(0);
             let _session = state.get_or_create_session(user_id).await;
 
@@ -264,6 +419,140 @@ async fn handle_command(
             };
 
             bot.send_message(msg.chat.id, welcome).await?;
+        }
+
+        Command::Challenge(text) => {
+            if !is_private_chat(&msg) {
+                bot.send_message(
+                    msg.chat.id,
+                    "Mint challenges in a DM with me so I can send you the result privately. \
+                     Open a private chat and type /challenge.",
+                )
+                .await?;
+                return Ok(());
+            }
+
+            let user = match msg.from.as_ref() {
+                Some(u) => u,
+                None => return Ok(()),
+            };
+
+            let label = {
+                let t = text.trim().trim_matches('"').trim();
+                if t.is_empty() { None } else { Some(t.to_string()) }
+            };
+
+            let token = mint_challenge_token();
+            let now = chrono::Utc::now();
+            let expires = now + chrono::Duration::minutes(CHALLENGE_TTL_MINUTES);
+
+            if let Err(e) = db
+                .create_challenge(&token, user.id.0 as i64, label.clone(), now, expires)
+                .await
+            {
+                warn!("Failed to create challenge: {}", e);
+                bot.send_message(msg.chat.id, "Could not create a challenge right now. Please try again.")
+                    .await?;
+                return Ok(());
+            }
+
+            let link = format!("https://t.me/{}?start={}", bot_username, token);
+            let label_line = label
+                .as_ref()
+                .map(|l| format!("\nFor: {}", l))
+                .unwrap_or_default();
+
+            bot.send_message(
+                msg.chat.id,
+                format!(
+                    "\u{1f6e1} Verification challenge created.{}\n\n\
+                     Send this link to the person and ask them to tap it:\n{}\n\n\
+                     When they open it, I'll check whether they're a verified human and \
+                     send you the result here. The link works once and expires in {} minutes.\n\n\
+                     \u{26a0} Only ever send a challenge link that YOU generated. I will never \
+                     ask anyone to sign a transaction, approve a token, or send funds.",
+                    label_line, link, CHALLENGE_TTL_MINUTES,
+                ),
+            )
+            .await?;
+        }
+
+        Command::Challenges => {
+            let user_id = msg.from.as_ref().map(|u| u.id.0).unwrap_or(0);
+            let now = chrono::Utc::now();
+
+            match db.list_challenges_for(user_id as i64, 10).await {
+                Ok(list) if list.is_empty() => {
+                    bot.send_message(
+                        msg.chat.id,
+                        "You haven't sent any challenges yet. Use /challenge to create one.",
+                    )
+                    .await?;
+                }
+                Ok(list) => {
+                    let mut text = String::from("Your recent challenges:\n");
+                    for c in &list {
+                        let icon = match c.display_status(now) {
+                            "passed" => "\u{2705}",
+                            "failed" => "\u{274c}",
+                            "expired" => "\u{231b}",
+                            _ => "\u{23f3}",
+                        };
+                        let who = c
+                            .claimant_username
+                            .as_ref()
+                            .map(|u| format!(" — @{}", u))
+                            .unwrap_or_default();
+                        let label = c
+                            .label
+                            .as_ref()
+                            .map(|l| format!(" ({})", l))
+                            .unwrap_or_default();
+                        text.push_str(&format!(
+                            "\n{} {}{}{} · {}",
+                            icon,
+                            c.display_status(now),
+                            who,
+                            label,
+                            c.created_at.format("%Y-%m-%d %H:%M"),
+                        ));
+                    }
+                    bot.send_message(msg.chat.id, text).await?;
+                }
+                Err(e) => {
+                    warn!("Failed to list challenges: {}", e);
+                    bot.send_message(msg.chat.id, "Could not load your challenges right now.")
+                        .await?;
+                }
+            }
+        }
+
+        Command::Verifyme => {
+            let user_id = msg.from.as_ref().map(|u| u.id.0).unwrap_or(0);
+            let entry = registry.lookup_by_user_id(user_id).await;
+            let (passed, tier) = evaluate_claimant(entry.as_ref());
+
+            let text = if passed {
+                let e = entry.as_ref().unwrap();
+                format!(
+                    "Here's what someone learns when they challenge you:\n\n\
+                     \u{2705} Verified — {}\n\
+                     ENS: {}\n\
+                     SBTs: {}",
+                    tier,
+                    e.ens_name,
+                    e.sbt_summary(),
+                )
+            } else {
+                format!(
+                    "Here's what someone learns when they challenge you:\n\n\
+                     \u{274c} {}\n\n\
+                     To pass a challenge, link your identity with /register <name.eth> (DM only). \
+                     One-tap social verification is coming soon.",
+                    tier,
+                )
+            };
+            bot.send_message(msg.chat.id, text).await?;
         }
 
         Command::Register(text) => {
@@ -625,12 +914,23 @@ async fn handle_command(
                 2. Own an ENS name with the same wallet\n\
                 3. At app.ens.domains, set text record org.telegram = your Telegram username\n\
                 4. DM me /register yourname.eth\n\n\
+                Verify a stranger before you trust them:\n\
+                /challenge — Create a one-time link to send someone (a cold DM, before \
+                a deal, before clicking a link they shared). When they tap it, I check \
+                whether they're a verified human and send you the result. The verdict \
+                comes from me, not a screenshot they control.\n\n\
                 Commands:\n\
+                /challenge [note] — Mint a verification link to send someone (DM only)\n\
+                /challenges — See challenges you've sent and their results\n\
+                /verifyme — See what others learn when they verify you\n\
                 /register <name.eth> — Link your ENS identity (DM only)\n\
                 /deregister — Remove your registration (DM only)\n\
                 /status — Check your registration details\n\
                 /whois @username — Look up a user's verification (works in groups)\n\
                 /verify <wallet> — Query any wallet for Human Passport SBTs\n\n\
+                Safety: I will NEVER ask you (or anyone) to sign a transaction, approve \
+                a token, or send funds. Only ever act on a challenge link YOU generated — \
+                a 'verify here' link arriving in an unsolicited DM is a scam.\n\n\
                 In groups, I automatically badge verified users on their first message.";
 
             bot.send_message(msg.chat.id, help).await?;
@@ -854,6 +1154,19 @@ async fn main() {
     // Create bot
     let bot = Bot::new(&config.telegram_bot_token);
 
+    // Resolve the bot's username so we can build t.me deep links for challenges.
+    let bot_username: Arc<String> = Arc::new(match bot.get_me().await {
+        Ok(me) => me.username.clone().unwrap_or_default(),
+        Err(e) => {
+            warn!(
+                "Could not fetch bot username via get_me ({}). Falling back to BOT_USERNAME env.",
+                e
+            );
+            std::env::var("BOT_USERNAME").unwrap_or_default()
+        }
+    });
+    info!("Bot username: @{}", bot_username);
+
     // Build dptree dispatcher
     let handler = dptree::entry()
         .branch(
@@ -870,7 +1183,9 @@ async fn main() {
             shared_provider,
             ens_resolver,
             shared_registry,
-            badge_tracker
+            badge_tracker,
+            database,
+            bot_username
         ])
         .enable_ctrlc_handler()
         .build()

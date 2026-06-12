@@ -15,6 +15,72 @@ pub struct PlatformLink {
     pub verified_via_ens: bool,
 }
 
+/// A verification challenge: a single-use token a "challenger" mints and sends to a
+/// counterparty, who claims it by opening the bot via a deep link. The claim result
+/// (pass/fail + assurance tier) is recorded and delivered back to the challenger.
+#[derive(Debug, Clone)]
+pub struct Challenge {
+    pub token: String,
+    pub challenger_user_id: i64,
+    pub label: Option<String>,
+    /// "pending" | "claimed". Expiry is derived from `expires_at`, not stored as a status.
+    pub status: String,
+    pub claimant_user_id: Option<i64>,
+    pub claimant_username: Option<String>,
+    pub claimant_tier: Option<String>,
+    pub passed: Option<bool>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub claimed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl Challenge {
+    /// True if the token is still claimable (pending and not past expiry).
+    pub fn is_open(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        self.status == "pending" && self.expires_at > now
+    }
+
+    /// Human-readable status for display, factoring in expiry.
+    pub fn display_status(&self, now: chrono::DateTime<chrono::Utc>) -> &'static str {
+        match self.status.as_str() {
+            "claimed" => match self.passed {
+                Some(true) => "passed",
+                Some(false) => "failed",
+                None => "claimed",
+            },
+            _ if self.expires_at <= now => "expired",
+            _ => "pending",
+        }
+    }
+
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        let parse = |s: String| -> chrono::DateTime<chrono::Utc> {
+            chrono::DateTime::parse_from_rfc3339(&s)
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::DateTime::from_timestamp(0, 0).unwrap())
+        };
+        let claimed_at: Option<String> = row.get(9)?;
+        Ok(Self {
+            token: row.get(0)?,
+            challenger_user_id: row.get(1)?,
+            label: row.get(2)?,
+            status: row.get(3)?,
+            claimant_user_id: row.get(4)?,
+            claimant_username: row.get(5)?,
+            claimant_tier: row.get(6)?,
+            passed: row.get::<_, Option<i32>>(7)?.map(|v| v != 0),
+            created_at: parse(row.get(8)?),
+            expires_at: parse(row.get(10)?),
+            claimed_at: claimed_at.map(parse),
+        })
+    }
+}
+
+/// Standard SELECT column list for challenges (order must match `Challenge::from_row`).
+const CHALLENGE_COLUMNS: &str = "token, challenger_user_id, label, status, \
+     claimant_user_id, claimant_username, claimant_tier, passed, created_at, \
+     claimed_at, expires_at";
+
 /// Raw column data extracted from a rusqlite Row.
 /// Used to shuttle data out of the synchronous `conn.call` closure
 /// so that fallible parsing happens in async context.
@@ -139,7 +205,23 @@ impl Database {
                      UNIQUE(telegram_user_id, platform)
                  );
 
-                 CREATE INDEX IF NOT EXISTS idx_platform_handle ON platform_links(platform, handle);",
+                 CREATE INDEX IF NOT EXISTS idx_platform_handle ON platform_links(platform, handle);
+
+                 CREATE TABLE IF NOT EXISTS challenges (
+                     token TEXT PRIMARY KEY,
+                     challenger_user_id INTEGER NOT NULL,
+                     label TEXT,
+                     status TEXT NOT NULL DEFAULT 'pending',
+                     claimant_user_id INTEGER,
+                     claimant_username TEXT,
+                     claimant_tier TEXT,
+                     passed INTEGER,
+                     created_at TEXT NOT NULL,
+                     claimed_at TEXT,
+                     expires_at TEXT NOT NULL
+                 );
+
+                 CREATE INDEX IF NOT EXISTS idx_challenge_challenger ON challenges(challenger_user_id);",
             )?;
             Ok(())
         })
@@ -388,6 +470,118 @@ impl Database {
             })
             .await?;
         Ok(links)
+    }
+
+    // -----------------------------------------------------------------------
+    // Challenge operations
+    // -----------------------------------------------------------------------
+
+    /// Create a new pending challenge token.
+    pub async fn create_challenge(
+        &self,
+        token: &str,
+        challenger_user_id: i64,
+        label: Option<String>,
+        created_at: chrono::DateTime<chrono::Utc>,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        let token = token.to_string();
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT INTO challenges
+                     (token, challenger_user_id, label, status, created_at, expires_at)
+                     VALUES (?1, ?2, ?3, 'pending', ?4, ?5)",
+                    params![
+                        token,
+                        challenger_user_id,
+                        label,
+                        created_at.to_rfc3339(),
+                        expires_at.to_rfc3339(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch a challenge by token.
+    pub async fn get_challenge(&self, token: &str) -> Result<Option<Challenge>> {
+        let token = token.to_string();
+        let sql = format!("SELECT {} FROM challenges WHERE token = ?1", CHALLENGE_COLUMNS);
+        let challenge = self
+            .conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(&sql)?;
+                let row = stmt
+                    .query_row(params![token], Challenge::from_row)
+                    .optional()?;
+                Ok(row)
+            })
+            .await?;
+        Ok(challenge)
+    }
+
+    /// Atomically claim a pending challenge. The `WHERE status = 'pending'` guard makes
+    /// this single-use even under concurrent claims: only the first claim updates a row.
+    /// Returns `true` if this call is the one that claimed it.
+    pub async fn claim_challenge(
+        &self,
+        token: &str,
+        claimant_user_id: i64,
+        claimant_username: Option<String>,
+        claimant_tier: &str,
+        passed: bool,
+        claimed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        let token = token.to_string();
+        let claimant_tier = claimant_tier.to_string();
+        let claimed = self
+            .conn
+            .call(move |conn| {
+                let count = conn.execute(
+                    "UPDATE challenges
+                     SET status = 'claimed', claimant_user_id = ?2, claimant_username = ?3,
+                         claimant_tier = ?4, passed = ?5, claimed_at = ?6
+                     WHERE token = ?1 AND status = 'pending'",
+                    params![
+                        token,
+                        claimant_user_id,
+                        claimant_username,
+                        claimant_tier,
+                        passed as i32,
+                        claimed_at.to_rfc3339(),
+                    ],
+                )?;
+                Ok(count > 0)
+            })
+            .await?;
+        Ok(claimed)
+    }
+
+    /// List a challenger's recent challenges, newest first.
+    pub async fn list_challenges_for(
+        &self,
+        challenger_user_id: i64,
+        limit: usize,
+    ) -> Result<Vec<Challenge>> {
+        let sql = format!(
+            "SELECT {} FROM challenges WHERE challenger_user_id = ?1 \
+             ORDER BY created_at DESC LIMIT ?2",
+            CHALLENGE_COLUMNS
+        );
+        let rows = self
+            .conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt
+                    .query_map(params![challenger_user_id, limit as i64], Challenge::from_row)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await?;
+        Ok(rows)
     }
 
     // -----------------------------------------------------------------------
@@ -644,6 +838,87 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_challenge_create_and_get() {
+        let db = Database::new_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let expires = now + chrono::Duration::minutes(30);
+        db.create_challenge("chg_abc", 111, Some("a deal".to_string()), now, expires)
+            .await
+            .unwrap();
+
+        let c = db.get_challenge("chg_abc").await.unwrap().unwrap();
+        assert_eq!(c.challenger_user_id, 111);
+        assert_eq!(c.label.as_deref(), Some("a deal"));
+        assert_eq!(c.status, "pending");
+        assert!(c.is_open(now));
+        assert_eq!(c.display_status(now), "pending");
+
+        assert!(db.get_challenge("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_challenge_claim_is_single_use() {
+        let db = Database::new_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let expires = now + chrono::Duration::minutes(30);
+        db.create_challenge("chg_xyz", 111, None, now, expires)
+            .await
+            .unwrap();
+
+        // First claim succeeds.
+        let first = db
+            .claim_challenge("chg_xyz", 222, Some("bob".to_string()), "KYC'd human", true, now)
+            .await
+            .unwrap();
+        assert!(first);
+
+        // Second claim is rejected (single-use guard).
+        let second = db
+            .claim_challenge("chg_xyz", 333, Some("eve".to_string()), "Unknown", false, now)
+            .await
+            .unwrap();
+        assert!(!second);
+
+        // Recorded result reflects the first claimant only.
+        let c = db.get_challenge("chg_xyz").await.unwrap().unwrap();
+        assert_eq!(c.status, "claimed");
+        assert_eq!(c.claimant_user_id, Some(222));
+        assert_eq!(c.passed, Some(true));
+        assert_eq!(c.display_status(now), "passed");
+        assert!(!c.is_open(now));
+    }
+
+    #[tokio::test]
+    async fn test_challenge_expiry_blocks_claim_open() {
+        let db = Database::new_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let expired = now - chrono::Duration::minutes(1);
+        db.create_challenge("chg_old", 111, None, now - chrono::Duration::minutes(31), expired)
+            .await
+            .unwrap();
+
+        let c = db.get_challenge("chg_old").await.unwrap().unwrap();
+        assert!(!c.is_open(now));
+        assert_eq!(c.display_status(now), "expired");
+    }
+
+    #[tokio::test]
+    async fn test_list_challenges_for() {
+        let db = Database::new_in_memory().await.unwrap();
+        let now = chrono::Utc::now();
+        let expires = now + chrono::Duration::minutes(30);
+        db.create_challenge("chg_1", 111, None, now, expires).await.unwrap();
+        db.create_challenge("chg_2", 111, None, now + chrono::Duration::seconds(1), expires)
+            .await
+            .unwrap();
+        db.create_challenge("chg_other", 999, None, now, expires).await.unwrap();
+
+        let list = db.list_challenges_for(111, 10).await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(list.iter().all(|c| c.challenger_user_id == 111));
     }
 
     #[tokio::test]
