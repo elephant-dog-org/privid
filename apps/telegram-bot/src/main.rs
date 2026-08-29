@@ -1215,10 +1215,11 @@ async fn main() {
     // Start HTTP API server alongside Telegram bot
     let api_registry = shared_registry.clone();
     let api_port = config.api_port;
+    let api_bind = config.api_bind.clone();
     tokio::spawn(async move {
-        start_api_server(api_registry, api_port).await;
+        start_api_server(api_registry, &api_bind, api_port).await;
     });
-    info!("API server started on port {}", config.api_port);
+    info!("API server started on {}:{}", config.api_bind, config.api_port);
 
     // Badge tracker (resets on restart)
     let badge_tracker: BadgeTracker = Arc::new(RwLock::new(HashSet::new()));

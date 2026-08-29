@@ -14,6 +14,8 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
       # Real Holonym SBT reads on Optimism by default; set "mock" in .env for dev.
       - VERIFICATION_MODE=${VERIFICATION_MODE:-blockchain}
+      # Inside the container the API must bind all interfaces to be reachable.
+      - API_BIND=0.0.0.0
     volumes:
       # SQLite registry + challenges live here (Database::new("data/privid.db")).
       # Without this mount every container restart wiped all registrations.

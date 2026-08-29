@@ -66,6 +66,11 @@ fn is_no_sbt_revert(message: &str) -> bool {
     m.contains("does not exist") || m.contains("expired")
 }
 
+/// Hub V3's other `getSBT` revert: `require(!sbt.revoked, "SBT has been revoked")`.
+fn is_revoked_revert(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("revoked")
+}
+
 #[async_trait]
 impl VerificationProvider for BlockchainVerificationProvider {
     async fn check_verification(
@@ -109,6 +114,11 @@ impl VerificationProvider for BlockchainVerificationProvider {
             .await
         {
             Ok(bytes) => bytes,
+            Err(RpcError::JsonRpc { message, .. }) if is_revoked_revert(&message) => {
+                // Hub.sol: require(!sbt.revoked, "SBT has been revoked")
+                warn!("SBT revoked for {} - {}", wallet_address, type_desc);
+                return Err(VerificationError::Revoked(type_desc));
+            }
             Err(RpcError::JsonRpc { message, .. }) if is_no_sbt_revert(&message) => {
                 debug!(
                     "Hub reverted for {} / {:?}: {} -> NotVerified",
@@ -233,6 +243,13 @@ mod tests {
         assert!(!is_no_sbt_revert("execution reverted"));
         assert!(!is_no_sbt_revert("rate limit exceeded"));
         assert!(!is_no_sbt_revert("out of gas"));
+    }
+
+    #[test]
+    fn test_revoked_revert_detection() {
+        assert!(is_revoked_revert("execution reverted: SBT has been revoked"));
+        assert!(!is_revoked_revert("execution reverted: SBT is expired or does not exist"));
+        assert!(!is_revoked_revert("rate limit exceeded"));
     }
 
     #[test]

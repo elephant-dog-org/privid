@@ -36,6 +36,9 @@ pub struct Config {
     pub rust_log: String,
     /// Port for the HTTP API server
     pub api_port: u16,
+    /// Interface the HTTP API binds to. Defaults to loopback so a dev run on a
+    /// shared host doesn't expose the registry to the LAN; Docker sets 0.0.0.0.
+    pub api_bind: String,
 }
 
 impl Config {
@@ -49,6 +52,8 @@ impl Config {
     /// - `OPTIMISM_RPC_URL` - defaults to public Optimism RPC
     /// - `HUB_CONTRACT_ADDRESS` - defaults to Holonym Hub V3
     /// - `RUST_LOG` - defaults to "info"
+    /// - `API_PORT` - defaults to 3141
+    /// - `API_BIND` - defaults to 127.0.0.1 (use 0.0.0.0 in containers)
     pub fn from_env() -> Self {
         let telegram_bot_token = env::var("TELEGRAM_BOT_TOKEN")
             .expect("TELEGRAM_BOT_TOKEN must be set in environment");
@@ -78,6 +83,8 @@ impl Config {
             .parse::<u16>()
             .unwrap_or(3141);
 
+        let api_bind = env::var("API_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+
         Self {
             telegram_bot_token,
             verification_mode,
@@ -86,6 +93,7 @@ impl Config {
             ethereum_rpc_url,
             rust_log,
             api_port,
+            api_bind,
         }
     }
 }

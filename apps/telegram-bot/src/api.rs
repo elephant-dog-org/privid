@@ -80,8 +80,8 @@ async fn health() -> &'static str {
     "ok"
 }
 
-/// Start the HTTP API server on the given port.
-pub async fn start_api_server(registry: Arc<Registry>, port: u16) {
+/// Start the HTTP API server on `bind:port` (e.g. "127.0.0.1", 3141).
+pub async fn start_api_server(registry: Arc<Registry>, bind: &str, port: u16) {
     let state = ApiState { registry };
 
     let cors = CorsLayer::new()
@@ -96,7 +96,7 @@ pub async fn start_api_server(registry: Arc<Registry>, port: u16) {
         .layer(cors)
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("{}:{}", bind, port);
     info!("API server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();

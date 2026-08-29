@@ -19,6 +19,10 @@ impl VerificationType {
     ///
     /// These circuit IDs are the on-chain identifiers used by the Holonym Hub
     /// contract to distinguish between different proof circuits.
+    ///
+    /// Source of truth: `holonym-foundation/holonym-api`,
+    /// `src/constants/misc.js` (`v3*CircuitId`). All five verified against
+    /// that file on 2026-08-28. If Holonym rotates a circuit, update here.
     pub fn circuit_id(&self) -> [u8; 32] {
         match self {
             VerificationType::Kyc => [
@@ -33,11 +37,14 @@ impl VerificationType {
                 0x93, 0x17, 0x30, 0xfb, 0x3d, 0xb7, 0x85, 0x9f,
                 0xc9, 0xcc, 0x86, 0xf0, 0xd5, 0x48, 0x34, 0x95,
             ],
+            // v3ZKPassportSybilResistanceCircuitId — the previous value (f2ce…364d)
+            // matched nothing in Holonym's sources; corrected 2026-08-28 against
+            // holonym-api/src/constants/misc.js.
             VerificationType::Passport => [
-                0xf2, 0xce, 0x24, 0x8b, 0x52, 0x93, 0x43, 0xe1,
-                0x05, 0xf7, 0xb3, 0xc1, 0x64, 0x59, 0xda, 0x61,
-                0x92, 0x81, 0xc5, 0xf8, 0x1c, 0xf7, 0x16, 0xd2,
-                0x8f, 0x7d, 0xf9, 0xf8, 0x76, 0x67, 0x36, 0x4d,
+                0x14, 0xc3, 0x51, 0x33, 0x90, 0xf8, 0xa0, 0x39,
+                0x93, 0xc8, 0x48, 0x62, 0x1b, 0x18, 0x40, 0xd5,
+                0x8c, 0x27, 0xfd, 0x50, 0xbb, 0xdd, 0xba, 0x73,
+                0x26, 0x5e, 0x22, 0xd1, 0x7b, 0x0b, 0x74, 0x7e,
             ],
             VerificationType::CleanHands => [
                 0x1c, 0x98, 0xfc, 0x4f, 0x7f, 0x1a, 0xd3, 0x80,
@@ -174,7 +181,7 @@ mod tests {
         let passport_hex = hex::encode(VerificationType::Passport.circuit_id());
         assert_eq!(
             passport_hex,
-            "f2ce248b529343e105f7b3c16459da619281c5f81cf716d28f7df9f87667364d"
+            "14c3513390f8a03993c848621b1840d58c27fd50bbddba73265e22d17b0b747e"
         );
 
         let clean_hands_hex = hex::encode(VerificationType::CleanHands.circuit_id());
