@@ -1,13 +1,14 @@
 # PrivID Telegram Bot (Rust)
 
-A privacy-respecting identity verification Telegram bot built with Rust and teloxide. This bot integrates with Holonym to provide zero-knowledge proof-based identity verification without collecting or storing personal data.
+A privacy-respecting identity verification Telegram bot built with Rust and teloxide. It reads Human ID (Holonym) zero-knowledge credentials straight from the Hub contract on Optimism, so it can confirm someone is a verified human without collecting or storing personal data.
 
 ## 🚀 Features
 
 -   **Privacy-First Design**: Zero-knowledge proofs ensure no personal data is collected or stored
--   **Holonym Integration**: Seamless integration with Holonym's verification API
--   **Session Management**: In-memory session tracking for verification states
--   **Demo Mode**: Runs without API keys for testing and development
+-   **On-chain Verification**: Reads Human ID SBTs (KYC, phone, ePassport, clean hands, biometrics) from Holonym Hub V3 on Optimism — no API keys
+-   **ENS Identity Linking**: `/register name.eth` proves ownership through the `org.telegram` text record; no wallet signature
+-   **Trust Checkpoint**: `/challenge` mints a single-use link; the counterparty taps it and you get the verdict by DM
+-   **Mock Mode**: Runs without any RPC calls for testing and development
 -   **Rich Commands**: Comprehensive command set with helpful responses
 -   **Error Handling**: Robust error handling and user-friendly error messages
 -   **Logging**: Comprehensive logging for debugging and monitoring
@@ -27,7 +28,7 @@ A privacy-respecting identity verification Telegram bot built with Rust and telo
 
 -   Rust 1.70+ (install via [rustup](https://rustup.rs/))
 -   Telegram Bot Token (get from [@BotFather](https://t.me/BotFather))
--   Optional: Holonym API Key for full verification features
+-   Nothing else — verification uses public Optimism and Ethereum RPC endpoints (override with `OPTIMISM_RPC_URL` / `ETHEREUM_RPC_URL`)
 
 ## 🚀 Quick Start
 
@@ -46,8 +47,8 @@ Edit `.env` file with your credentials:
 # Required
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 
-# Optional (for full verification features)
-HOLONYM_API_KEY=your_holonym_api_key_here
+# "mock" (no RPC calls) or "blockchain" (real Human ID SBT reads on Optimism)
+VERIFICATION_MODE=blockchain
 
 # Logging
 RUST_LOG=info
@@ -84,40 +85,49 @@ See `SMOKE_TEST.md` for the end-to-end script with real Telegram accounts.
 
 1. Find your bot on Telegram (using the username you set up with BotFather)
 2. Send `/start` to begin
-3. Use `/verify` to test verification (demo mode if no API key)
+3. Use `/verify 0x...` to check a wallet's SBTs (mock data if `VERIFICATION_MODE=mock`)
 4. Use `/status` to check verification status
 5. Use `/help` for command information
 
 ## 📚 Commands
 
-| Command   | Description                              |
-| --------- | ---------------------------------------- |
-| `/start`  | Start the bot and see welcome message    |
-| `/verify` | Begin identity verification with Holonym |
-| `/status` | Check your verification status           |
-| `/help`   | Show help information                    |
+| Command                 | Description                                                        |
+| ----------------------- | ------------------------------------------------------------------ |
+| `/start`                | Welcome message (also handles `chg_` challenge links)              |
+| `/challenge [note]`     | Mint a single-use verification link to send someone (DM only)      |
+| `/challenges`           | List the challenges you've sent and their results                  |
+| `/verifyme`             | See exactly what a challenger learns about you                     |
+| `/verify <wallet>`      | Check any wallet's Human ID SBTs                                   |
+| `/register <name.eth>`  | Link your ENS name to your Telegram account (DM only)              |
+| `/deregister`           | Remove the link                                                    |
+| `/whois @user`          | Look up someone's verification (or reply to their message)         |
+| `/status`               | Your registration status                                           |
+| `/help`                 | Help and safety rules                                              |
 
 ## 🔧 Configuration
 
 ### Environment Variables
 
 -   `TELEGRAM_BOT_TOKEN` (required): Your Telegram bot token from BotFather
--   `HOLONYM_API_KEY` (optional): Holonym API key for full verification features
+-   `VERIFICATION_MODE` (optional): `mock` (default) or `blockchain`
+-   `OPTIMISM_RPC_URL`, `ETHEREUM_RPC_URL` (optional): override the public RPC endpoints
+-   `HUB_CONTRACT_ADDRESS` (optional): Holonym Hub V3, defaults to `0x2AA822e264F8cc31A2b9C22f39e5551241e94DfB`
+-   `API_BIND`, `API_PORT` (optional): HTTP lookup API, default `127.0.0.1:3141`
 -   `RUST_LOG` (optional): Logging level (debug, info, warn, error)
 
 ### Running Modes
 
-#### Demo Mode (Default)
+#### Mock Mode (Default)
 
--   Runs without Holonym API key
--   Shows verification flow without actual verification
+-   No RPC calls; deterministic fake SBT results
 -   Perfect for testing and development
 
-#### Full Mode
+#### Blockchain Mode
 
--   Requires valid Holonym API key
--   Performs actual identity verification
--   Stores verification results in session state
+-   `VERIFICATION_MODE=blockchain`
+-   Calls `getSBT(address, circuitId)` on Holonym Hub V3 on Optimism for each credential type, honouring expiry and revocation
+-   Resolves ENS names and text records on Ethereum mainnet
+-   Verify the endpoints are reachable with `cargo test --test live_rpc_test -- --ignored`
 
 ## 🏗️ Architecture
 
@@ -125,9 +135,15 @@ See `SMOKE_TEST.md` for the end-to-end script with real Telegram accounts.
 
 ```
 src/
-├── main.rs          # Main bot logic and command handlers
-├── holonym.rs       # Holonym API integration
-└── state.rs         # Session and state management
+├── main.rs            # Command handlers, challenge flow, verdict formatting
+├── config.rs          # Environment configuration
+├── db.rs              # SQLite: identities, platform links, challenges
+├── registry.rs        # Registry facade over the database
+├── api.rs             # HTTP lookup API used by the browser extension
+├── state.rs           # Session state
+├── blockchain/        # Hub V3 ABI encoding, JSON-RPC client, SBT types
+├── ens/               # ENS namehash + resolver (address + text records)
+└── verification/      # VerificationProvider trait, mock + blockchain impls
 ```
 
 ### Key Components
@@ -138,11 +154,11 @@ src/
 -   `VerificationState`: Enum for different verification states
 -   `BotState`: Thread-safe session storage using RwLock
 
-#### Holonym Integration (`holonym.rs`)
+#### Verification Providers (`verification/`, `blockchain/`)
 
--   `HolonymClient`: HTTP client for Holonym API
--   Verification request/response structures
--   Mock verification for demo mode
+-   `VerificationProvider` trait — the seam for adding credential sources
+-   `BlockchainVerificationProvider`: reads SBTs from Hub V3 via `eth_call`
+-   `MockVerificationProvider`: deterministic results for development
 
 #### Main Bot Logic (`main.rs`)
 
@@ -244,7 +260,7 @@ make run
 
     ```bash
     export TELEGRAM_BOT_TOKEN=your_token
-    export HOLONYM_API_KEY=your_key  # optional
+    export VERIFICATION_MODE=blockchain
     export RUST_LOG=info
     ```
 

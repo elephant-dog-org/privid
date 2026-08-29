@@ -29,15 +29,15 @@ bun run build
 - 🦋 Post verification to Bluesky via AT Protocol
 - 🎨 Inject verification badge on Bluesky profiles
 
-### Telegram Bot (Beta - Mock Mode)
+### Telegram Bot (Beta - Live on Optimism)
 
 ```bash
 cd apps/telegram-bot
 cp env.example .env
-# Add your TELEGRAM_BOT_TOKEN to .env
+# Add your TELEGRAM_BOT_TOKEN to .env; set VERIFICATION_MODE=blockchain for real checks
 cargo run
 ```
-**🧪 Beta**: Mock verification only, not connected to blockchain
+**🧪 Beta**: Reads Human ID (Holonym) SBTs directly from the Hub contract on Optimism — no API keys. First live user test in progress.
 
 ### Web Frontend (Demo UI)
 
@@ -135,13 +135,14 @@ privid/
 - ⚠️ **Not yet submitted to Chrome/Firefox extension stores**
 
 ### Telegram Bot (Beta Testing 🧪)
-**Mock Mode Only - Not Blockchain Connected**
+**Blockchain-connected — Human ID SBTs on Optimism, ENS on mainnet**
 
-- Privacy-respecting Telegram bot interface
-- Mock verification flow (not real blockchain queries)
-- Session management with file persistence
-- Commands: `/start`, `/verify`, `/status`, `/help`
-- ⚠️ **Awaiting blockchain integration**
+- Reads KYC / phone / ePassport / clean-hands / biometrics SBTs from the Holonym Hub V3 contract
+- `/register name.eth` links a Telegram identity via the ENS `org.telegram` text record — no wallet signature
+- **Trust checkpoint**: `/challenge` mints a single-use link; the counterparty taps it and the verdict is DM'd to you
+- SQLite registry + HTTP lookup API used by the browser extension
+- Commands: `/start`, `/challenge`, `/challenges`, `/verifyme`, `/verify`, `/register`, `/deregister`, `/whois`, `/status`, `/help`
+- ⚠️ Not yet: one-tap social verification for people with no wallet; Human Passport Stamps; signed verdicts
 
 ### Web Frontend (Demo/Landing Page 🎨)
 **UI Showcase Only**
@@ -194,10 +195,11 @@ privid/
 - ✅ Badge injection on Bluesky profiles
 - ✅ Mock mode toggle for testing
 
-#### Telegram Bot - MOCK MODE
+#### Telegram Bot - LIVE
 - ✅ Full command set functional
-- ✅ Session management
-- ⚠️ Mock verification only (not blockchain-connected)
+- ✅ Real SBT reads from Holonym Hub V3 on Optimism (expiry + revocation aware)
+- ✅ ENS-based identity linking and on-demand verification challenges
+- ⚠️ Mock mode still available for development (`VERIFICATION_MODE=mock`)
 
 #### Frontend - DEMO UI
 - ✅ Visual interface
@@ -207,7 +209,7 @@ privid/
 
 - Extension not submitted to Chrome/Firefox stores
 - No mobile wallet support yet
-- Telegram bot not connected to blockchain
+- Telegram bot: no one-tap path yet for users without a wallet
 - Frontend not integrated with backend
 - Limited error handling for RPC failures
 - No batch SBT queries (checks each type sequentially)
@@ -218,7 +220,7 @@ privid/
 - ✅ **Real Holonym integration via blockchain** (PR #29)
 - ✅ Badge rendering on Bluesky profiles
 - ✅ ATProto publishing logic
-- ✅ Telegram bot MVP (mock mode)
+- ✅ Telegram bot MVP
 - ✅ Mock/test mode toggle
 - ✅ Developer documentation
 - ✅ **Wallet connection and authentication**
