@@ -229,7 +229,7 @@ fn mint_challenge_token() -> String {
 /// OAuth-social (rung 1) and Human Passport Stamps land in a later pass.
 fn evaluate_claimant(entry: Option<&RegistrationEntry>) -> (bool, &'static str) {
     match entry {
-        Some(e) if !e.verified_sbt_types.is_empty() => (true, "KYC'd human (Human Passport SBT)"),
+        Some(e) if !e.verified_sbt_types.is_empty() => (true, "KYC'd human (Human ID SBT)"),
         Some(_) => (false, "ENS linked, but no valid credential on the wallet"),
         None => (false, "Telegram account only — nothing linked"),
     }
@@ -453,19 +453,19 @@ async fn handle_command(
 
             let welcome = if is_private_chat(&msg) {
                 "Welcome to PrivID — proof of personhood for Telegram.\n\n\
-                 I link your Human Passport to your Telegram identity \
+                 I link your Human ID to your Telegram identity \
                  using ENS, so people in group chats can see you're a verified human.\n\n\
-                 Human Passport (by Human Tech) lets you prove you hold a real government-issued passport, \
+                 Human ID (by human.tech, formerly Holonym) lets you prove you hold a real government-issued passport, \
                  phone number, or KYC credential using zero-knowledge proofs — no personal data \
                  is revealed. These proofs are stored as Soul-Bound Tokens (SBTs) on Optimism.\n\n\
                  How to register:\n\
-                 1. Get your Human Passport at app.passport.xyz (passport, phone, or KYC)\n\
+                 1. Get your Human ID at id.human.tech (government ID, phone, or ePassport)\n\
                  2. Own an ENS name (e.g. yourname.eth)\n\
                  3. Go to app.ens.domains, edit your ENS text records, \
                  and set org.telegram to your Telegram username (without @)\n\
                  4. DM me: /register yourname.eth\n\n\
                  I'll read the org.telegram record from your ENS to confirm you own it, \
-                 resolve your wallet address, and check for Human Passport SBTs. \
+                 resolve your wallet address, and check for Human ID SBTs. \
                  No wallet signature needed — your ENS record is the proof.\n\n\
                  Once registered, I'll automatically badge you as verified in any group chat I'm in.\n\n\
                  Commands:\n\
@@ -477,7 +477,7 @@ async fn handle_command(
             } else {
                 "PrivID — proof of personhood for Telegram.\n\n\
                  I automatically identify verified humans in this chat. \
-                 Users who hold a Human Passport (passport, phone, or KYC verification) \
+                 Users who hold a Human ID (passport, phone, or KYC verification) \
                  and linked their ENS name will be badged when they message.\n\n\
                  /whois @username — Look up someone's verification\n\
                  /verify <wallet> — Check a wallet address\n\n\
@@ -743,7 +743,7 @@ async fn handle_command(
 
                 bot.send_message(
                     msg.chat.id,
-                    format!("ENS verified! Checking Human Passport SBTs for {}...", short_addr(&wallet_address)),
+                    format!("ENS verified! Checking Human ID SBTs for {}...", short_addr(&wallet_address)),
                 )
                 .await?;
 
@@ -866,7 +866,7 @@ async fn handle_command(
 
             if let Some(entry) = entry {
                 let response = format!(
-                    "\u{2705} @{} is verified — Human Passport\n\
+                    "\u{2705} @{} is verified — Human ID\n\
                      ENS: {}\n\
                      SBTs: {}\n\
                      Wallet: {}",
@@ -972,17 +972,17 @@ async fn handle_command(
             let help = "\
                 PrivID — proof of personhood for Telegram\n\n\
                 What it does:\n\
-                PrivID verifies that a Telegram user holds a Human Passport — \
+                PrivID verifies that a Telegram user holds a Human ID — \
                 a zero-knowledge proof of a real-world credential (government passport, phone, or KYC). \
                 No personal data is ever revealed or stored — only the fact that you're verified.\n\n\
                 How the link works:\n\
                 Your ENS name (e.g. yourname.eth) acts as the bridge between your wallet and \
                 your Telegram account. By setting an org.telegram text record on your ENS, \
                 you prove ownership without needing a wallet signature. The bot reads this record \
-                on-chain, resolves your wallet address, and checks for Human Passport Soul-Bound Tokens \
+                on-chain, resolves your wallet address, and checks for Human ID Soul-Bound Tokens \
                 on Optimism.\n\n\
                 Setup:\n\
-                1. Get your Human Passport at app.passport.xyz (passport, phone, or KYC)\n\
+                1. Get your Human ID at id.human.tech (government ID, phone, or ePassport)\n\
                 2. Own an ENS name with the same wallet\n\
                 3. At app.ens.domains, set text record org.telegram = your Telegram username\n\
                 4. DM me /register yourname.eth\n\n\
@@ -999,7 +999,7 @@ async fn handle_command(
                 /deregister — Remove your registration (DM only)\n\
                 /status — Check your registration details\n\
                 /whois @username — Look up a user's verification (works in groups)\n\
-                /verify <wallet> — Query any wallet for Human Passport SBTs\n\n\
+                /verify <wallet> — Query any wallet for Human ID SBTs\n\n\
                 Safety: I will NEVER ask you (or anyone) to sign a transaction, approve \
                 a token, or send funds. Only ever act on a challenge link YOU generated — \
                 a 'verify here' link arriving in an unsolicited DM is a scam.\n\n\
@@ -1067,7 +1067,7 @@ async fn handle_message(
         if !entry.verified_sbt_types.is_empty() {
             // Badge this user
             let badge_msg = format!(
-                "\u{2705} @{} is verified — Human Passport\nENS: {} | {}",
+                "\u{2705} @{} is verified — Human ID\nENS: {} | {}",
                 entry.telegram_username,
                 entry.ens_name,
                 entry.sbt_summary(),

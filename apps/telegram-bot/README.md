@@ -67,6 +67,19 @@ cargo build --release
 make run
 ```
 
+### 3b. Run against the real chain
+
+`VERIFICATION_MODE=blockchain` reads Human ID (Holonym) SBTs directly from the
+Hub V3 contract on Optimism and resolves ENS on mainnet — public RPCs, no API
+keys. Before a live session:
+
+```bash
+cargo test                                      # unit tests, offline
+cargo test --test live_rpc_test -- --ignored    # hits the real RPCs
+```
+
+See `SMOKE_TEST.md` for the end-to-end script with real Telegram accounts.
+
 ### 4. Test the Bot
 
 1. Find your bot on Telegram (using the username you set up with BotFather)
