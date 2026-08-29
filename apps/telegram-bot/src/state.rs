@@ -54,11 +54,9 @@ impl UserSession {
     }
 
     pub fn generate_mock_verification_result() -> VerificationResult {
-        let badge_strings = vec![
-            "Identity Verified via Holonym",
+        let badge_strings = ["Identity Verified via Holonym",
             "Verified Person", 
-            "Authenticated by ZK Proof"
-        ];
+            "Authenticated by ZK Proof"];
         
         let random_index = (rand::random::<f64>() * badge_strings.len() as f64) as usize;
         let random_proof_id = rand::random::<u64>().to_string();
@@ -79,6 +77,12 @@ impl UserSession {
 pub struct BotState {
     sessions: Arc<RwLock<HashMap<u64, UserSession>>>,
     storage: Option<Arc<crate::storage::FileStorage>>,
+}
+
+impl Default for BotState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BotState {

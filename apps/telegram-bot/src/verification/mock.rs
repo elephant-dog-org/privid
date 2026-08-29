@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_mock_default() {
-        let provider = MockVerificationProvider::default();
+        let provider = MockVerificationProvider;
         assert!(provider.is_mock());
     }
 }

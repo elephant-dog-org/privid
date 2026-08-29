@@ -1,0 +1,5 @@
+# Keep secrets, build output and local state out of the image.
+.env
+target/
+data/
+logs/

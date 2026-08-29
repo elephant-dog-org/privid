@@ -132,7 +132,7 @@ impl EnsResolver {
 ///   [100..]   string data, padded to 32-byte boundary
 fn encode_text_call(node: &[u8; 32], key: &str) -> Vec<u8> {
     let key_bytes = key.as_bytes();
-    let padded_len = (key_bytes.len() + 31) / 32 * 32;
+    let padded_len = key_bytes.len().div_ceil(32) * 32;
 
     let mut data = Vec::with_capacity(4 + 32 + 32 + 32 + padded_len);
 

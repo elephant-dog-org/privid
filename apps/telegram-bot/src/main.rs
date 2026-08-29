@@ -1,12 +1,3 @@
-mod api;
-mod blockchain;
-mod config;
-mod db;
-mod ens;
-mod registry;
-mod state;
-mod storage;
-mod verification;
 
 use teloxide::prelude::*;
 use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters};
@@ -18,16 +9,14 @@ use std::sync::Arc;
 use std::path::PathBuf;
 use tokio::sync::RwLock;
 
-use crate::blockchain::types::VerificationType;
-use crate::config::{Config, VerificationMode};
-use crate::ens::resolver::EnsResolver;
-use crate::db::Database;
-use crate::registry::{Registry, RegistrationEntry};
-use crate::state::BotState;
-use crate::storage::FileStorage;
-use crate::verification::provider::{VerificationError, VerificationProvider};
-use crate::verification::mock::MockVerificationProvider;
-use crate::blockchain::provider::BlockchainVerificationProvider;
+// Everything below comes from the library crate (src/lib.rs). The bin used to
+// re-declare each module with `mod ...;`, which compiled the tree twice and
+// buried real warnings under bogus "never used" noise.
+use privid_telegram_bot::{
+    start_api_server, BlockchainVerificationProvider, BotState, Config, Database, EnsResolver,
+    FileStorage, MockVerificationProvider, RegistrationEntry, Registry, VerificationError,
+    VerificationMode, VerificationProvider, VerificationResult, VerificationType,
+};
 
 /// Tracks which (chat_id, user_id) pairs have already been badged this session.
 type BadgeTracker = Arc<RwLock<HashSet<(i64, u64)>>>;
@@ -117,7 +106,7 @@ fn verification_keyboard(wallet_address: &str) -> InlineKeyboardMarkup {
 fn format_single_result(
     wallet_address: &str,
     vtype: VerificationType,
-    result: &Result<crate::state::VerificationResult, VerificationError>,
+    result: &Result<VerificationResult, VerificationError>,
     mode_label: &str,
 ) -> String {
     let addr_short = short_addr(wallet_address);
@@ -164,7 +153,7 @@ fn format_single_result(
 
 fn format_all_results(
     wallet_address: &str,
-    results: &[(VerificationType, Result<crate::state::VerificationResult, VerificationError>)],
+    results: &[(VerificationType, Result<VerificationResult, VerificationError>)],
     mode_label: &str,
 ) -> String {
     let addr_short = short_addr(wallet_address);
@@ -227,17 +216,79 @@ fn mint_challenge_token() -> String {
     format!("{}{}", CHALLENGE_PREFIX, hex::encode(rand::random::<[u8; 16]>()))
 }
 
-/// Evaluate a claimant against the local registry and return (passed, assurance tier).
+/// Evaluate a claimant against the registry and return (passed, assurance tier).
 ///
-/// MVP scope: reads the existing ENS/Holonym-backed registry (the read-first "rung 2"
-/// of the enrollment ladder). OAuth-social (rung 1) and the Human Passport Stamps
-/// provider land in a later pass.
+/// The tier names follow the enrollment ladder in
+/// `.speckit/spec-telegram-challenge.md`: the verdict states *what kind* of
+/// assurance was found, not a bare yes/no, so the challenger can weigh it.
+///
+/// - rung 0: no registration at all -> only a Telegram account stands behind them
+/// - rung 2 (linked, no SBT): ENS is bound, but the wallet holds no valid credential
+/// - rung 2 (linked + SBT): a KYC'd human — Holonym SBT on Optimism
+///
+/// OAuth-social (rung 1) and Human Passport Stamps land in a later pass.
 fn evaluate_claimant(entry: Option<&RegistrationEntry>) -> (bool, &'static str) {
     match entry {
-        Some(e) if !e.verified_sbt_types.is_empty() => (true, "KYC'd human (Human Passport)"),
-        Some(_) => (false, "Linked, but no credential"),
-        None => (false, "Unknown — not verified"),
+        Some(e) if !e.verified_sbt_types.is_empty() => (true, "KYC'd human (Human Passport SBT)"),
+        Some(_) => (false, "ENS linked, but no valid credential on the wallet"),
+        None => (false, "Telegram account only — nothing linked"),
     }
+}
+
+/// Re-check a registered wallet's SBTs on-chain and persist the fresh state.
+///
+/// A verdict says "Checked: <time>", so it must reflect the chain *now*, not
+/// whatever was true when the user ran `/register` (SBTs expire; a lapsed KYC
+/// would otherwise keep passing challenges indefinitely).
+///
+/// Fail-safe: if the RPC itself is down (every circuit returns an
+/// infrastructure error rather than "not found"), keep the cached state and
+/// log it — an outage must not silently turn a verified user into a failure.
+/// In mock mode the cached entry is returned untouched.
+async fn refresh_entry(
+    entry: RegistrationEntry,
+    provider: &dyn VerificationProvider,
+    registry: &Registry,
+    now: chrono::DateTime<chrono::Utc>,
+) -> RegistrationEntry {
+    if provider.is_mock() {
+        return entry;
+    }
+    let results = provider.check_all_verifications(&entry.wallet_address).await;
+
+    // "Not verified / expired / revoked" are answers; anything else is the RPC
+    // failing to answer. Only trust the refresh if at least one circuit answered.
+    let answered = results.iter().any(|(_, r)| {
+        !matches!(
+            r,
+            Err(VerificationError::RpcError(_)) | Err(VerificationError::AbiError(_))
+        )
+    });
+    if !answered {
+        warn!(
+            "On-chain refresh for {} got no answers (RPC down?); keeping cached SBTs",
+            entry.wallet_address
+        );
+        return entry;
+    }
+
+    let fresh: Vec<VerificationType> = results
+        .iter()
+        .filter(|(_, r)| r.is_ok())
+        .map(|(vt, _)| *vt)
+        .collect();
+
+    let mut updated = entry;
+    if updated.verified_sbt_types != fresh {
+        info!(
+            "SBT state changed for {}: {:?} -> {:?}",
+            updated.wallet_address, updated.verified_sbt_types, fresh
+        );
+    }
+    updated.verified_sbt_types = fresh;
+    updated.last_verified = now;
+    registry.register(updated.clone()).await;
+    updated
 }
 
 /// Handle a claimant opening a challenge deep link (`/start chg_<token>`).
@@ -250,6 +301,7 @@ async fn handle_claim(
     token: &str,
     db: &Database,
     registry: &Registry,
+    provider: &dyn VerificationProvider,
     bot_username: &str,
 ) -> ResponseResult<()> {
     let claimant = match msg.from.as_ref() {
@@ -283,8 +335,12 @@ async fn handle_claim(
         return Ok(());
     }
 
-    // Evaluate the claimant against the registry (read-first).
-    let entry = registry.lookup_by_user_id(claimant.id.0).await;
+    // Evaluate the claimant against the registry (read-first), re-checking the
+    // chain so the verdict reflects current SBT state.
+    let entry = match registry.lookup_by_user_id(claimant.id.0).await {
+        Some(e) => Some(refresh_entry(e, provider, registry, now).await),
+        None => None,
+    };
     let (passed, tier) = evaluate_claimant(entry.as_ref());
 
     // Atomically claim the token (single-use guard inside SQL).
@@ -351,8 +407,18 @@ async fn handle_claim(
         )
     };
 
-    bot.send_message(ChatId(challenge.challenger_user_id), verdict)
-        .await?;
+    // The claimant has already been told "sent". If the challenger can't be
+    // reached (blocked the bot, deleted account), log it rather than erroring
+    // out of the handler; the result is still visible to them in /challenges.
+    if let Err(e) = bot
+        .send_message(ChatId(challenge.challenger_user_id), verdict)
+        .await
+    {
+        warn!(
+            "Could not deliver verdict for {} to challenger {}: {}",
+            token, challenge.challenger_user_id, e
+        );
+    }
 
     Ok(())
 }
@@ -378,7 +444,7 @@ async fn handle_command(
             // Deep-link claim: /start chg_<token>
             let payload = payload.trim();
             if payload.starts_with(CHALLENGE_PREFIX) {
-                handle_claim(&bot, &msg, payload, &db, &registry, &bot_username).await?;
+                handle_claim(&bot, &msg, payload, &db, &registry, provider.as_ref(), &bot_username).await?;
                 return Ok(());
             }
 
@@ -529,7 +595,13 @@ async fn handle_command(
 
         Command::Verifyme => {
             let user_id = msg.from.as_ref().map(|u| u.id.0).unwrap_or(0);
-            let entry = registry.lookup_by_user_id(user_id).await;
+            // Same live re-check a real challenge performs, so "what others
+            // learn" is exactly what they would learn right now.
+            let now = chrono::Utc::now();
+            let entry = match registry.lookup_by_user_id(user_id).await {
+                Some(e) => Some(refresh_entry(e, provider.as_ref(), &registry, now).await),
+                None => None,
+            };
             let (passed, tier) = evaluate_claimant(entry.as_ref());
 
             let text = if passed {
@@ -1144,7 +1216,7 @@ async fn main() {
     let api_registry = shared_registry.clone();
     let api_port = config.api_port;
     tokio::spawn(async move {
-        crate::api::start_api_server(api_registry, api_port).await;
+        start_api_server(api_registry, api_port).await;
     });
     info!("API server started on port {}", config.api_port);
 

@@ -12,7 +12,12 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - RUST_LOG=${RUST_LOG:-info}
+      # Real Holonym SBT reads on Optimism by default; set "mock" in .env for dev.
+      - VERIFICATION_MODE=${VERIFICATION_MODE:-blockchain}
     volumes:
+      # SQLite registry + challenges live here (Database::new("data/privid.db")).
+      # Without this mount every container restart wiped all registrations.
+      - ./data:/app/data
       # Optional: Mount logs directory if you want to persist logs
       - ./logs:/app/logs
     # Optional: Add healthcheck

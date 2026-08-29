@@ -1,5 +1,4 @@
 use privid_telegram_bot::{BotState, UserSession, VerificationState, VerificationResult, FileStorage};
-use std::path::PathBuf;
 use tempfile::tempdir;
 
 #[tokio::test]
