@@ -55,6 +55,17 @@ impl From<RpcError> for VerificationError {
     }
 }
 
+/// Does this JSON-RPC revert message mean "no valid SBT for this wallet"?
+///
+/// Hub V3's `getSBT` reverts (rather than returning zeros) when the SBT is
+/// missing or expired. The contract folds both cases into one message, so we
+/// cannot distinguish "never verified" from "verified but lapsed" on-chain;
+/// both map to `NotVerified`, which is the honest verdict either way.
+fn is_no_sbt_revert(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("does not exist") || m.contains("expired")
+}
+
 #[async_trait]
 impl VerificationProvider for BlockchainVerificationProvider {
     async fn check_verification(
@@ -84,10 +95,29 @@ impl VerificationProvider for BlockchainVerificationProvider {
         );
 
         // 4. Execute eth_call with retry (3 retries for transient failures)
-        let response_bytes = self
+        //
+        // Hub V3 does NOT return a zeroed struct for a missing SBT: `getSBT`
+        // REVERTS with "SBT is expired or does not exist" (verified against the
+        // live Optimism contract 2026-08-28 — see tests/live_rpc_test.rs). That
+        // is the normal outcome for any unverified wallet, so it must surface as
+        // `NotVerified`, not as an infrastructure `RpcError` that the bot would
+        // show the user as a failure. Genuine RPC problems still propagate.
+        let type_desc = verification_type.description().to_string();
+        let response_bytes = match self
             .rpc_client
             .eth_call_with_retry(&self.hub_contract_address, &calldata, 3)
-            .await?;
+            .await
+        {
+            Ok(bytes) => bytes,
+            Err(RpcError::JsonRpc { message, .. }) if is_no_sbt_revert(&message) => {
+                debug!(
+                    "Hub reverted for {} / {:?}: {} -> NotVerified",
+                    wallet_address, verification_type, message
+                );
+                return Err(VerificationError::NotVerified(type_desc));
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         // 5. Decode the ABI response
         let sbt = abi::decode_sbt_response(&response_bytes)?;
@@ -102,7 +132,6 @@ impl VerificationProvider for BlockchainVerificationProvider {
         );
 
         // 6. Check validity
-        let type_desc = verification_type.description().to_string();
 
         // No SBT exists
         if sbt.is_empty() {
@@ -193,6 +222,17 @@ mod tests {
             provider.hub_contract_address(),
             "0x2AA822e264F8cc31A2b9C22f39e5551241e94DfB"
         );
+    }
+
+    #[test]
+    fn test_no_sbt_revert_detection() {
+        // The exact message Hub V3 emits on Optimism (captured live 2026-08-28).
+        assert!(is_no_sbt_revert("execution reverted: SBT is expired or does not exist"));
+        assert!(is_no_sbt_revert("SBT does not exist"));
+        // Infrastructure failures must NOT be swallowed as "not verified".
+        assert!(!is_no_sbt_revert("execution reverted"));
+        assert!(!is_no_sbt_revert("rate limit exceeded"));
+        assert!(!is_no_sbt_revert("out of gas"));
     }
 
     #[test]
